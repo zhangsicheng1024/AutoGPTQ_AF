@@ -54,6 +54,7 @@ def make_quant(
     module,
     names,
     bits,
+    format: str,
     group_size,
     name='',
     use_triton=False,
@@ -61,7 +62,7 @@ def make_quant(
     desc_act=False,
     trainable=False
 ):
-    QuantLinear = dynamically_import_QuantLinear(use_triton=use_triton, desc_act=desc_act, group_size=group_size)
+    QuantLinear = dynamically_import_QuantLinear(use_triton=use_triton, desc_act=desc_act, group_size=group_size, format=format)
 
     if isinstance(module, QuantLinear):
         return
@@ -93,6 +94,7 @@ def make_quant(
             child,
             names,
             bits,
+            format,
             group_size,
             name + '.' + name1 if name != '' else name1,
             use_triton=use_triton,
@@ -106,6 +108,7 @@ def pack_model(
     model,
     quantizers,
     bits,
+    format,
     group_size,
     use_triton=False,
     use_cuda_fp16=True,
@@ -113,7 +116,7 @@ def pack_model(
     warmup_triton: bool = False,
     force_layer_back_to_cpu: bool = False
 ):
-    QuantLinear = dynamically_import_QuantLinear(use_triton=use_triton, desc_act=desc_act, group_size=group_size)
+    QuantLinear = dynamically_import_QuantLinear(use_triton=use_triton, desc_act=desc_act, group_size=group_size, format=format)
 
     if force_layer_back_to_cpu:
         model.to(CPU)
@@ -121,16 +124,25 @@ def pack_model(
     logger.info('Packing model...')
     layers = find_layers(model)
     layers = {n: layers[n] for n in quantizers}
-    make_quant(model, quantizers, bits, group_size, use_triton=use_triton, use_cuda_fp16=use_cuda_fp16, desc_act=desc_act)
+    make_quant(model, quantizers, bits, format, group_size, use_triton=use_triton, use_cuda_fp16=use_cuda_fp16, desc_act=desc_act)
     qlayers = find_layers(model, [QuantLinear])
     for name in qlayers:
         logger.info(name)
-        quantizers[name], scale, zero, g_idx = quantizers[name]
         # so far can only pack layer on CPU
         layer_device = qlayers[name].device
         qlayers[name].to(CPU)
-        layers[name], scale, zero, g_idx = layers[name].to(CPU), scale.to(CPU), zero.to(CPU), g_idx.to(CPU)
-        qlayers[name].pack(layers[name], scale, zero, g_idx)
+        if format == 'nf':
+            quantizers[name], scale, g_idx = quantizers[name]
+            layers[name], scale, g_idx = layers[name].to(CPU), scale.to(CPU), g_idx.to(CPU)
+            qlayers[name].pack(layers[name], scale, g_idx)
+        elif format == 'fp':
+            quantizers[name], scale, g_idx = quantizers[name]
+            layers[name], scale, g_idx = layers[name].to(CPU), scale.to(CPU), g_idx.to(CPU)
+            qlayers[name].pack(layers[name], scale, g_idx)
+        else: # int
+            quantizers[name], scale, zero, g_idx = quantizers[name]
+            layers[name], scale, zero, g_idx = layers[name].to(CPU), scale.to(CPU), zero.to(CPU), g_idx.to(CPU)
+            qlayers[name].pack(layers[name], scale, zero, g_idx)
         qlayers[name].to(layer_device)
     logger.info('Model packed.')
 

@@ -131,6 +131,7 @@ class FusedLlamaAttentionForQuantizedModel(FusedBaseAttentionModule):
         model,
         use_triton=False,
         group_size=-1,
+        format='int',
         use_cuda_fp16=True,
         desc_act=False,
         trainable=False,
@@ -139,7 +140,7 @@ class FusedLlamaAttentionForQuantizedModel(FusedBaseAttentionModule):
         """
         Replace all LlamaAttention modules with QuantLlamaAttention modules, fusing the q, k, v projections.
         """
-        QuantLinear = dynamically_import_QuantLinear(use_triton=use_triton, desc_act=desc_act, group_size=group_size)
+        QuantLinear = dynamically_import_QuantLinear(use_triton=use_triton, desc_act=desc_act, group_size=group_size, format=format)
 
         for name, m in model.named_modules():
             if not isinstance(m, LlamaAttention):
@@ -150,7 +151,8 @@ class FusedLlamaAttentionForQuantizedModel(FusedBaseAttentionModule):
             v_proj = m.v_proj
 
             qweights = torch.cat([q_proj.qweight, k_proj.qweight, v_proj.qweight], dim=1)
-            qzeros = torch.cat([q_proj.qzeros, k_proj.qzeros, v_proj.qzeros], dim=1)
+            if hasattr(q_proj, "qzeros"):
+                qzeros = torch.cat([q_proj.qzeros, k_proj.qzeros, v_proj.qzeros], dim=1)
             scales = torch.cat([q_proj.scales, k_proj.scales, v_proj.scales], dim=1)
             g_idx = torch.cat([q_proj.g_idx, k_proj.g_idx, v_proj.g_idx], dim=0)
             bias = torch.cat([q_proj.bias, k_proj.bias, v_proj.bias], dim=0) if q_proj.bias is not None else None
@@ -167,7 +169,8 @@ class FusedLlamaAttentionForQuantizedModel(FusedBaseAttentionModule):
                 qlinear_kwargs["use_cuda_fp16"] = use_cuda_fp16
             qkv_layer = QuantLinear(*qlinear_args, **qlinear_kwargs)
             qkv_layer.qweight = qweights
-            qkv_layer.qzeros = qzeros
+            if hasattr(q_proj, "qzeros"):
+                qkv_layer.qzeros = qzeros
             qkv_layer.scales = scales
             qkv_layer.g_idx = g_idx
             qkv_layer.bias = bias

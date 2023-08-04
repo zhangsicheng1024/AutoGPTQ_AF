@@ -24,7 +24,8 @@ class GeneralQuantLinear(nn.Linear):
         self.qweight.requires_grad = False
         self.bias.requires_grad = False
 
-        self.qzeros = quant_linear_module.qzeros
+        if hasattr(quant_linear_module, "qzeros"):
+            self.qzeros = quant_linear_module.qzeros
         self.scales = quant_linear_module.scales
         self.g_idx = quant_linear_module.g_idx
 

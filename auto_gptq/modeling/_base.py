@@ -32,6 +32,7 @@ logger = getLogger(__name__)
 @dataclass
 class BaseQuantizeConfig(PushToHubMixin):
     bits: int = field(default=4, metadata={"choices": [2, 3, 4, 8]})
+    format: str = field(default='int', metadata={"choices": ['int', 'fp', 'nf']})
     group_size: int = field(default=-1)
     damp_percent: float = field(default=0.01)
     desc_act: bool = field(default=True)
@@ -45,6 +46,8 @@ class BaseQuantizeConfig(PushToHubMixin):
 
         if self.bits not in fields_info[0].metadata["choices"]:
             raise ValueError(f"only support quantize to {fields_info[0].metadata['choices']} bits.")
+        if self.format not in fields_info[1].metadata["choices"]:
+            raise ValueError(f"only support quantize to {fields_info[1].metadata['choices']} formats.")
         if self.group_size != -1 and self.group_size <= 0:
             raise ValueError("unless equal to -1, group_size must greater then 0.")
         if not (0 < self.damp_percent < 1):
@@ -93,6 +96,7 @@ class BaseQuantizeConfig(PushToHubMixin):
     def to_dict(self):
         return {
             "bits": self.bits,
+            "format": self.format,
             "group_size": self.group_size,
             "damp_percent": self.damp_percent,
             "desc_act": self.desc_act,
@@ -201,7 +205,8 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
         use_triton: bool = False,
         use_cuda_fp16: bool = True,
         autotune_warmup_after_quantized: bool = False,
-        cache_examples_on_gpu: bool = True
+        cache_examples_on_gpu: bool = True,
+        pack: bool = True # If only quant & eval in fp16, no pack. If need to save 4bit model, pack
     ):
         if self.quantized:
             raise EnvironmentError("can't execute quantize because the model is quantized.")
@@ -321,13 +326,28 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                 subset = {n: full[n] for n in names}
                 gptq = {}
                 for name in subset:
-                    gptq[name] = GPTQ(subset[name])
-                    gptq[name].quantizer.configure(
-                        self.quantize_config.bits,
-                        perchannel=True,
-                        sym=self.quantize_config.sym,
-                        mse=False,
-                    )
+                    gptq[name] = GPTQ(subset[name], self.quantize_config.format)
+                    if self.quantize_config.format == 'nf':
+                        gptq[name].quantizer.configure(
+                            self.quantize_config.bits,
+                            perchannel=True,
+                            sym=self.quantize_config.sym,
+                            mse=False,
+                        )
+                    elif self.quantize_config.format == 'fp':
+                        gptq[name].quantizer.configure(
+                            self.quantize_config.bits,
+                            perchannel=True,
+                            sym=self.quantize_config.sym,
+                            mse=False,
+                        )
+                    else: # int
+                        gptq[name].quantizer.configure(
+                            self.quantize_config.bits,
+                            perchannel=True,
+                            sym=self.quantize_config.sym,
+                            mse=False,
+                        )
 
                 def add_batch(name):
                     def tmp(_, inp, out):
@@ -358,17 +378,40 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
 
                 for name in subset:
                     logger.info(f'Quantizing {name} in layer {i + 1}/{len(layers)}...')
-                    scale, zero, g_idx = gptq[name].fasterquant(
-                        percdamp=self.quantize_config.damp_percent,
-                        group_size=self.quantize_config.group_size,
-                        actorder=self.quantize_config.desc_act
-                    )
-                    quantizers[f'{self.layers_block_name}.{i}.{name}'] = (
-                        gptq[name].quantizer.to(CPU if force_layer_back_to_cpu else cur_layer_device),
-                        move_to_device(scale, CPU if force_layer_back_to_cpu else cur_layer_device),
-                        move_to_device(zero, CPU if force_layer_back_to_cpu else cur_layer_device),
-                        move_to_device(g_idx, CPU if force_layer_back_to_cpu else cur_layer_device)
-                    )
+                    if self.quantize_config.format == 'nf':
+                        scale, g_idx = gptq[name].fasterquant(
+                            percdamp=self.quantize_config.damp_percent,
+                            group_size=self.quantize_config.group_size,
+                            actorder=self.quantize_config.desc_act
+                        )
+                        quantizers[f'{self.layers_block_name}.{i}.{name}'] = (
+                            gptq[name].quantizer.to(CPU if force_layer_back_to_cpu else cur_layer_device),
+                            move_to_device(scale, CPU if force_layer_back_to_cpu else cur_layer_device),
+                            move_to_device(g_idx, CPU if force_layer_back_to_cpu else cur_layer_device)
+                        )
+                    elif self.quantize_config.format == 'fp':
+                        scale, g_idx = gptq[name].fasterquant(
+                            percdamp=self.quantize_config.damp_percent,
+                            group_size=self.quantize_config.group_size,
+                            actorder=self.quantize_config.desc_act
+                        )
+                        quantizers[f'{self.layers_block_name}.{i}.{name}'] = (
+                            gptq[name].quantizer.to(CPU if force_layer_back_to_cpu else cur_layer_device),
+                            move_to_device(scale, CPU if force_layer_back_to_cpu else cur_layer_device),
+                            move_to_device(g_idx, CPU if force_layer_back_to_cpu else cur_layer_device)
+                        )
+                    else: # int
+                        scale, zero, g_idx = gptq[name].fasterquant(
+                            percdamp=self.quantize_config.damp_percent,
+                            group_size=self.quantize_config.group_size,
+                            actorder=self.quantize_config.desc_act
+                        )
+                        quantizers[f'{self.layers_block_name}.{i}.{name}'] = (
+                            gptq[name].quantizer.to(CPU if force_layer_back_to_cpu else cur_layer_device),
+                            move_to_device(scale, CPU if force_layer_back_to_cpu else cur_layer_device),
+                            move_to_device(zero, CPU if force_layer_back_to_cpu else cur_layer_device),
+                            move_to_device(g_idx, CPU if force_layer_back_to_cpu else cur_layer_device)
+                        )
                     gptq[name].free()
 
             for j in range(num_batches):
@@ -398,17 +441,19 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
             layer_inputs, layer_outputs = layer_outputs, []
             torch.cuda.empty_cache()
 
-        pack_model(
-            model=self.model,
-            quantizers=quantizers,
-            bits=self.quantize_config.bits,
-            group_size=self.quantize_config.group_size,
-            use_triton=use_triton,
-            use_cuda_fp16=use_cuda_fp16,
-            desc_act=self.quantize_config.desc_act,
-            warmup_triton=autotune_warmup_after_quantized,
-            force_layer_back_to_cpu=force_layer_back_to_cpu
-        )
+        if(pack):
+            pack_model(
+                model=self.model,
+                quantizers=quantizers,
+                bits=self.quantize_config.bits,
+                format=self.quantize_config.format,
+                group_size=self.quantize_config.group_size,
+                use_triton=use_triton,
+                use_cuda_fp16=use_cuda_fp16,
+                desc_act=self.quantize_config.desc_act,
+                warmup_triton=autotune_warmup_after_quantized,
+                force_layer_back_to_cpu=force_layer_back_to_cpu
+            )
         if device_map:
             self.model = remove_hook_from_module(self.model, recurse=True)
             self.model = simple_dispatch_model(self.model, device_map)
@@ -804,6 +849,7 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                 model,
                 layers,
                 quantize_config.bits,
+                quantize_config.format,
                 quantize_config.group_size,
                 use_triton=use_triton,
                 use_cuda_fp16=use_cuda_fp16,
@@ -875,6 +921,7 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                     model,
                     use_triton=use_triton,
                     group_size=quantize_config.group_size,
+                    format=quantize_config.format,
                     use_cuda_fp16=use_cuda_fp16,
                     desc_act=quantize_config.desc_act,
                     trainable=trainable
@@ -900,7 +947,7 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
 
         # == step7: make model compatible with peft
         cls.make_sure_compatible_with_peft(
-            model, use_triton, quantize_config.desc_act, quantize_config.group_size
+            model, use_triton, quantize_config.desc_act, quantize_config.group_size, quantize_config.format
         )
 
         return cls(
@@ -937,10 +984,10 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
         self.enable_trainable_mode(enabled=False)
 
     @staticmethod
-    def make_sure_compatible_with_peft(model: PreTrainedModel, use_triton: bool, desc_act: bool, group_size: int):
+    def make_sure_compatible_with_peft(model: PreTrainedModel, use_triton: bool, desc_act: bool, group_size: int, format: str):
         GeneralQuantLinear.inject_to_model(
             model,
-            dynamically_import_QuantLinear(use_triton, desc_act, group_size)
+            dynamically_import_QuantLinear(use_triton, desc_act, group_size, format)
         )
 
     def __getattr__(self, item):

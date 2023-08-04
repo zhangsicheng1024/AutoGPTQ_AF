@@ -8,6 +8,8 @@ import torch.nn as nn
 import transformers
 
 from .quantizer import Quantizer
+from .quantizer_nf4 import Quantizer_nf4
+from .quantizer_fp4 import Quantizer_fp4
 
 
 logger = getLogger(__name__)
@@ -17,7 +19,7 @@ torch.backends.cudnn.allow_tf32 = False
 
 
 class GPTQ:
-    def __init__(self, layer):
+    def __init__(self, layer, format: str):
         self.layer = layer
         self.dev = self.layer.weight.device
         W = layer.weight.data.clone()
@@ -29,7 +31,13 @@ class GPTQ:
         self.columns = W.shape[1]
         self.H = torch.zeros((self.columns, self.columns), device=self.dev)
         self.nsamples = 0
-        self.quantizer = Quantizer()
+        self.format = format
+        if format == 'nf':
+            self.quantizer = Quantizer_nf4()
+        elif format == 'fp':
+            self.quantizer = Quantizer_fp4()
+        else:
+            self.quantizer = Quantizer()
 
     def add_batch(self, inp, out):
         if os.environ.get("DEBUG"):
@@ -78,11 +86,11 @@ class GPTQ:
         del self.H
         dead = torch.diag(H) == 0
         H[dead, dead] = 1
-        W[:, dead] = 0
+        W[:, dead] = 0 #
 
         if actorder:
             perm = torch.argsort(torch.diag(H), descending=True)
-            W = W[:, perm]
+            W = W[:, perm] #
             H = H[perm][:, perm]
 
         Losses = torch.zeros_like(W)
@@ -120,8 +128,14 @@ class GPTQ:
                         self.quantizer.find_params(W[:, (i1 + i):(i1 + i + group_size)], weight=True)
 
                     if ((i1 + i) // group_size) - now_idx == -1:
-                        scale.append(self.quantizer.scale)
-                        zero.append(self.quantizer.zero)
+                        if self.format == 'nf':
+                            scale.append(self.quantizer.scale)
+                        elif self.format == 'fp':
+                            scale.append(self.quantizer.scale)
+                            # zero.append(self.quantizer.zero)
+                        else: # int
+                            scale.append(self.quantizer.scale)
+                            zero.append(self.quantizer.zero)
                         now_idx += 1
 
                 q = self.quantizer.quantize(w.unsqueeze(1)).flatten()
@@ -129,13 +143,13 @@ class GPTQ:
                 Losses1[:, i] = (w - q) ** 2 / d ** 2
 
                 err1 = (w - q) / d
-                W1[:, i:] -= err1.unsqueeze(1).matmul(Hinv1[i, i:].unsqueeze(0))
+                W1[:, i:] -= err1.unsqueeze(1).matmul(Hinv1[i, i:].unsqueeze(0)) #
                 Err1[:, i] = err1
 
             Q[:, i1:i2] = Q1
             Losses[:, i1:i2] = Losses1 / 2
 
-            W[:, i2:] -= Err1.matmul(Hinv[i1:i2, i2:])
+            W[:, i2:] -= Err1.matmul(Hinv[i1:i2, i2:]) #
 
             if os.environ.get("DEBUG"):
                 self.layer.weight.data[:, :i2] = Q[:, :i2]
@@ -161,12 +175,25 @@ class GPTQ:
         if os.environ.get("DEBUG"):
             logger.debug(torch.sum((self.layer(self.inp1) - self.out1) ** 2))
 
-        if scale == []:
-            scale.append(self.quantizer.scale)
-            zero.append(self.quantizer.zero)
-        scale = torch.cat(scale, dim=1)
-        zero = torch.cat(zero, dim=1)
-        return scale, zero, g_idx
+        if self.format == 'nf':
+            if scale == []:
+                scale.append(self.quantizer.scale)
+            scale = torch.cat(scale, dim=1)
+            return scale, g_idx
+        elif self.format == 'fp':
+            if scale == []:
+                scale.append(self.quantizer.scale)
+                # zero.append(self.quantizer.zero)
+            scale = torch.cat(scale, dim=1)
+            # zero = torch.cat(zero, dim=1)
+            return scale, g_idx
+        else: # int
+            if scale == []:
+                scale.append(self.quantizer.scale)
+                zero.append(self.quantizer.zero)
+            scale = torch.cat(scale, dim=1)
+            zero = torch.cat(zero, dim=1)
+            return scale, zero, g_idx
 
     def free(self):
         if os.environ.get("DEBUG"):
