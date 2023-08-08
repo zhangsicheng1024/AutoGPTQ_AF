@@ -217,58 +217,49 @@ def opt_eval(model, testenc, dev, seqlen = 2048):
 
     model.config.use_cache = use_cache
 
-def eval(model_base, model_checkpoint, eval_target):
-    from datasets import load_dataset
-    from datautils import get_loaders, Evaluator_lambada, Evaluator_piqa, Evaluator_hellaswag
+def eval(model, eval_tasks):
     time_start = time.time()
 
-    # datasets = ['wikitext2', 'ptb', 'c4-new']
+    # ppl tasks, datasets = ['wikitext2', 'ptb', 'c4-new']
     datasets = []
-    if 'wikitext2' in eval_target: datasets.append('wikitext2')
-    if 'ptb' in eval_target: datasets.append('ptb')
-    if 'c4-new' in eval_target: datasets.append('c4-new')
+    if 'wikitext2' in eval_tasks: datasets.append('wikitext2')
+    if 'ptb' in eval_tasks: datasets.append('ptb')
+    if 'c4' in eval_tasks: datasets.append('c4')
+    if 'ptb-new' in eval_tasks: datasets.append('ptb-new')
+    if 'c4-new' in eval_tasks: datasets.append('c4-new')
+    from datautils import get_loaders
     for dataset in datasets:
         dataloader, testloader = get_loaders(
-            dataset, seed=0, model=model_base, seqlen=2048
+            dataset, seed=0, model=model.name_or_path, seqlen=2048
         )
         print(dataset)
-        llama_eval(model_checkpoint, testloader, 'cuda')
+        llama_eval(model, testloader, 'cuda')
 
-    from transformers import LlamaTokenizer
-    tokenizer = LlamaTokenizer.from_pretrained(model_base, use_fast=False)
-    tokenizer.pad_token = "[PAD]"
+    # QA tasks, datasets = ['lambada_openai', 'piqa', 'hellaswag']
+    datasets = []
+    if 'lambada_openai' in eval_tasks: datasets.append('lambada_openai')
+    if 'piqa' in eval_tasks: datasets.append('piqa')
+    if 'hellaswag' in eval_tasks: datasets.append('hellaswag')
+    if len(datasets) > 0:
+        from transformers import AutoTokenizer
+        from utils import LMEvalAdaptor
+        from lm_eval import evaluator
+        import json
+        tokenizer = AutoTokenizer.from_pretrained(model.name_or_path, use_fast=False)
+        lm_eval_model = LMEvalAdaptor(model.name_or_path, model.cuda(), tokenizer, 2)
+        results = evaluator.simple_evaluate(
+            model=lm_eval_model,
+            tasks=datasets,
+            batch_size=2,
+            no_cache=True,
+            num_fewshot=0
+        )
+        dumped = json.dumps(results, indent=2)
+        print('QA eval:')
+        print(dumped)
 
-    # ============lambada==================
-    if 'lambada' in eval_target:
-        dataset = load_dataset('lambada', split='validation', cache_dir='/gptq/datasets')
-        evaluator_lambada = Evaluator_lambada(dataset, tokenizer, 'cuda')
-        acc_lambada = evaluator_lambada.evaluate(model_checkpoint.cuda())
-        evaluator_lambada = None
-        dataset = None
-        print("lambada: ", acc_lambada)
-        torch.cuda.empty_cache()
-    # =============piqa=====================
-    if 'piqa' in eval_target:
-        dataset = load_dataset('piqa', split='validation', cache_dir='/gptq/datasets')
-        evaluator_piqa = Evaluator_piqa(dataset, tokenizer, 'cuda', model_checkpoint)
-        acc_piqa = evaluator_piqa.evaluate(model_checkpoint.cuda())
-        evaluator_piqa = None
-        dataset = None
-        print("piqa: ", acc_piqa)
-        torch.cuda.empty_cache()
-    # =============hellaswag================
-    if 'hellaswag' in eval_target:
-        dataset = load_dataset('hellaswag', split='validation', cache_dir='/gptq/datasets')
-        evaluator_hellaswag = Evaluator_hellaswag(dataset, tokenizer, 'cuda', model_checkpoint)
-        acc_hellaswag = evaluator_hellaswag.evaluate(model_checkpoint.cuda())
-        evaluator_hellaswag = None
-        dataset = None
-        print("hellaswag: ", acc_hellaswag)
-        torch.cuda.empty_cache()
-
-    print('eval time: %fh' % ((time.time() - time_start) / 60. / 60.))
-
-def mmlu_eval(model, output_path=None):
+    # MMLU tasks
+    if 'mmlu' not in eval_tasks: return
     import json
     from lm_eval import tasks, evaluator, utils
     tasks_ = 'hendrycksTest-*'
@@ -276,7 +267,6 @@ def mmlu_eval(model, output_path=None):
     # task_names = ['hendrycksTest-world_religions']
     print(f"Selected Tasks: {task_names}")
 
-    time_start = time.time()
     results = evaluator.simple_evaluate(
         model=model.to('cuda:0'),
         model_args='use_accelerate=True',
@@ -284,15 +274,14 @@ def mmlu_eval(model, output_path=None):
         num_fewshot=5,
         batch_size=2,
     )
-    print('mmlu eval time: %fh' % ((time.time() - time_start) / 60. / 60.))
 
-    dumped = json.dumps(results, indent=2)
+    # dumped = json.dumps(results, indent=2)
     # print(dumped)
 
-    if output_path:
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        with open(output_path, "w") as f:
-            f.write(dumped)
+    # if output_path:
+    #     os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    #     with open(output_path, "w") as f:
+    #         f.write(dumped)
 
     print(evaluator.make_table(results))
 
@@ -313,74 +302,66 @@ def mmlu_eval(model, output_path=None):
 
     print("mmlu-acc:", avg_acc)
 
-# pretrained_model_dir = "huggyllama/llama-7b"
-# quantized_model_dir = "save/llama1-7b_nf4_g128"
+    print('eval time: %fh' % ((time.time() - time_start) / 60. / 60.))
 
-# pretrained_model_dir = "facebook/opt-125m"
-# quantized_model_dir = "save/opt125m_int4_test"
 
-pretrained_model_dir = "meta-llama/Llama-2-7b-hf"
-# quantized_model_dir = "save/llama2-7b_nf4_g64"
-
-# pretrained_model_dir = "meta-llama/Llama-2-13b-hf"
-# quantized_model_dir = "save/llama2-13b_nf4_g128"
-
-# pretrained_model_dir = "meta-llama/Llama-2-70b-hf"
-# quantized_model_dir = "save/llama2-70b_nf4_g128"
-
-# pretrained_model_dir = "meta-llama/Llama-2-70b-chat-hf"
-# quantized_model_dir = "save/llama2-70b_chat_nf4_g128"
+# "huggyllama/llama-7b"
+# "facebook/opt-125m"
+# "meta-llama/Llama-2-7b-hf"
+# "meta-llama/Llama-2-13b-hf"
+# "meta-llama/Llama-2-70b-hf"
+# "meta-llama/Llama-2-70b-chat-hf"
 
 
 def main():
-    do_quant = True # quant or only load&eval ori fp16 model
-    format = 'fp'
-    group_size = 128
-    pack = True # If only quant & eval in fp16, no pack. If need to save 4bit model, pack
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--model', default='meta-llama/Llama-2-7b-hf', type=str)
+    parser.add_argument('--format', default='int', choices=['int', 'fp', 'nf'])
+    parser.add_argument('--group_size', default=128, type=int)
+    parser.add_argument('--no_quant', action='store_true') # quant or only load&eval ori fp16 model
+    parser.add_argument('--no_pack', action='store_true') # If only quant & eval in fp16, no pack. If need to save 4bit model, pack
+    parser.add_argument('--tasks', default='wikitext2', type=str) # all: wikitext2,ptb,c4-new,hellaswag,mmlu
+    args = parser.parse_args()
 
-    # tokenizer = AutoTokenizer.from_pretrained(pretrained_model_dir, use_fast=True)
-    traindataset,testenc = get_wikitext2(128, 0, 2048, pretrained_model_dir)
+    traindataset,testenc = get_wikitext2(128, 0, 2048, args.model)
 
     quantize_config = BaseQuantizeConfig(
         bits=4,  # quantize model to 4-bit
-        format=format, # quantize model to int / nf / fp
-        group_size=group_size,  # it is recommended to set the value to 128
+        format=args.format, # quantize model to int / nf / fp
+        group_size=args.group_size,  # it is recommended to set the value to 128
         desc_act=False,  # desc_act and group size only works on triton
     )
 
     # load un-quantized model, the model will always be force loaded into cpu
-    model = AutoGPTQForCausalLM.from_pretrained(pretrained_model_dir, quantize_config, cache_dir='/gptq_hub')
+    model = AutoGPTQForCausalLM.from_pretrained(args.model, quantize_config)
 
     # quantize model
-    if do_quant:
+    if not args.no_quant:
+        logger.info(f'Base model: {args.model}, Format: {args.format}, Group_size: {args.group_size}')
         time_start = time.time()
-        model.quantize(traindataset, use_triton=False, pack=pack)
+        model.quantize(traindataset, use_triton=False, pack=(not args.no_pack))
         logger.info('quant time: %fh' % ((time.time() - time_start) / 60. / 60.))
 
-    # model.save_quantized(quantized_model_dir)
-    # model = AutoGPTQForCausalLM.from_quantized(quantized_model_dir, device="cuda:0", use_triton=False, 
+    # save & load quantized model in fp16
+    # model.model.save_pretrained('save/llama2_7b_fp4_fp16')
+    # from transformers import AutoModelForCausalLM
+    # model.model = AutoModelForCausalLM.from_pretrained("save/llama2_7b_fp4_fp16")
+
+    # save & load quantized model in 4bit
+    # model.save_quantized('save/llama2_7b_fp4_g128')
+    # model = AutoGPTQForCausalLM.from_quantized('save/llama2_7b_fp4_g128', device="cuda:0", use_triton=False, 
     #     inject_fused_attention=False, inject_fused_mlp=False
     # )
 
     # wikitext eval for llama/opt, from ori augogptq code
-    # if 'llama' in pretrained_model_dir:
-    #     llama_eval(model.model, testenc, "cuda:0")
-    # else:
-    #     opt_eval(model.model, testenc, "cuda:0")
+    # if 'llama' in pretrained_model_dir: llama_eval(model.model, testenc, "cuda:0")
+    # else: opt_eval(model.model, testenc, "cuda:0")
 
-    # ['wikitext2', 'ptb', 'c4-new', 'lambada', 'piqa', 'hellaswag'] eval
-    # if '7b' in pretrained_model_dir:
-    #     model_base = 'meta-llama/Llama-2-7b-hf'
-    # elif '13b' in pretrained_model_dir:
-    #     model_base = 'meta-llama/Llama-2-13b-hf'
-    # elif '70b' in pretrained_model_dir:
-    #     model_base = 'meta-llama/Llama-2-70b-hf'
-    # # datasets = ['wikitext2', 'ptb', 'c4-new', 'lambada', 'piqa', 'hellaswag']
-    # datasets = ['wikitext2']
-    # eval(model_base, model.model, datasets)
-
-    # mmlu eval
-    mmlu_eval(model.model)
+    # eval
+    if args.tasks == 'all': tasks = ['wikitext2', 'ptb', 'c4-new', 'hellaswag', 'mmlu']
+    else: tasks = args.tasks.split(',')
+    eval(model.model, tasks)
 
 if __name__ == "__main__":
     import logging
