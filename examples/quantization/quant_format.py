@@ -1,6 +1,5 @@
 import os
 
-from transformers import AutoTokenizer, TextGenerationPipeline
 from auto_gptq import AutoGPTQForCausalLM, BaseQuantizeConfig
 import numpy as np
 import torch
@@ -217,7 +216,7 @@ def opt_eval(model, testenc, dev, seqlen = 2048):
 
     model.config.use_cache = use_cache
 
-def eval(model, eval_tasks):
+def eval(model_name, model, eval_tasks):
     time_start = time.time()
 
     # ppl tasks, datasets = ['wikitext2', 'ptb', 'c4-new']
@@ -230,7 +229,7 @@ def eval(model, eval_tasks):
     from datautils import get_loaders
     for dataset in datasets:
         dataloader, testloader = get_loaders(
-            dataset, seed=0, model=model.name_or_path, seqlen=2048
+            dataset, seed=0, model=model_name, seqlen=2048
         )
         print(dataset)
         llama_eval(model, testloader, 'cuda')
@@ -245,8 +244,8 @@ def eval(model, eval_tasks):
         from utils import LMEvalAdaptor
         from lm_eval import evaluator
         import json
-        tokenizer = AutoTokenizer.from_pretrained(model.name_or_path, use_fast=False)
-        lm_eval_model = LMEvalAdaptor(model.name_or_path, model.cuda(), tokenizer, 2)
+        tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)
+        lm_eval_model = LMEvalAdaptor(model_name, model.cuda(), tokenizer, 2)
         results = evaluator.simple_evaluate(
             model=lm_eval_model,
             tasks=datasets,
@@ -361,7 +360,7 @@ def main():
     # eval
     if args.tasks == 'all': tasks = ['wikitext2', 'ptb', 'c4-new', 'hellaswag', 'mmlu']
     else: tasks = args.tasks.split(',')
-    eval(model.model, tasks)
+    eval(args.model, model.model, tasks)
 
 if __name__ == "__main__":
     import logging
