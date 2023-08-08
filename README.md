@@ -1,6 +1,12 @@
 ### AutoGPTQ_AF Usage
+Basic:
 ```shell
 python examples/quantization/quant_format.py --model meta-llama/Llama-2-7b-hf --format fp --group_size 128
+```
+
+Quant & Evaluation in fp16:
+```shell
+python examples/quantization/quant_format.py --model meta-llama/Llama-2-7b-hf --format fp --group_size 128 --no_pack --tasks all
 ```
 
 <h1 align="center">AutoGPTQ</h1>
