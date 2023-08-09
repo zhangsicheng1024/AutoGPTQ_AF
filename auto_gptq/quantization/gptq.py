@@ -10,6 +10,7 @@ import transformers
 from .quantizer import Quantizer
 from .quantizer_nf4 import Quantizer_nf4
 from .quantizer_fp4 import Quantizer_fp4
+from .quantizer_af4 import Quantizer_af4
 
 
 logger = getLogger(__name__)
@@ -19,7 +20,7 @@ torch.backends.cudnn.allow_tf32 = False
 
 
 class GPTQ:
-    def __init__(self, layer, format: str):
+    def __init__(self, layer, format: str, gptq_quant: bool):
         self.layer = layer
         self.dev = self.layer.weight.device
         W = layer.weight.data.clone()
@@ -36,8 +37,17 @@ class GPTQ:
             self.quantizer = Quantizer_nf4()
         elif format == 'fp':
             self.quantizer = Quantizer_fp4()
+        elif format == 'af':
+            self.quantizer = Quantizer_af4()
         else:
             self.quantizer = Quantizer()
+        if format != 'af':
+            if gptq_quant == True:
+                self.fasterquant = self.fasterquant_gptq
+            else:
+                self.fasterquant = self.fasterquant_rtn
+        else:
+            self.fasterquant = self.fasterquant_af
 
     def add_batch(self, inp, out):
         if os.environ.get("DEBUG"):
@@ -66,8 +76,125 @@ class GPTQ:
         inp = math.sqrt(2 / self.nsamples) * inp.float()
         # self.H += 2 / self.nsamples * inp.matmul(inp.t())
         self.H += inp.matmul(inp.t())
+    
+    def fasterquant_af(
+        self, group_size=-1, percentile=0.9, format_prototype='int'
+    ):
+        # groupsize: af grain
+        # percentile: 
+        # format_prototype: be int, fp, nf, or real tensor
+        W = self.layer.weight.data.clone()
+        self.quantizer.find_params(W, weight=True)
+        self.layer.weight.data = self.quantizer.quantize(W, group_size, percentile, format_prototype).type_as(self.layer.weight.data)
+        
 
-    def fasterquant(
+    def fasterquant_rtn(
+        self, blocksize=128, percdamp=.01, group_size=-1, actorder=False
+    ):
+        W = self.layer.weight.data.clone()
+        if isinstance(self.layer, nn.Conv2d):
+            W = W.flatten(1)
+        if isinstance(self.layer, transformers.Conv1D):
+            W = W.t()
+        W = W.float()
+
+        tick = time.time()
+
+        if not self.quantizer.ready():
+            self.quantizer.find_params(W, weight=True)
+
+
+        if actorder:
+            perm = torch.argsort(torch.diag(H), descending=True)
+            W = W[:, perm]
+
+        Losses = torch.zeros_like(W)
+        Q = torch.zeros_like(W)
+
+        g_idx = []
+        scale = []
+        zero = []
+        now_idx = 1
+
+        for i1 in range(0, self.columns, blocksize):
+            i2 = min(i1 + blocksize, self.columns)
+            count = i2 - i1
+
+            W1 = W[:, i1:i2].clone()
+            Q1 = torch.zeros_like(W1)
+            Losses1 = torch.zeros_like(W1)
+
+            for i in range(count):
+                w = W1[:, i]
+
+                if group_size != -1:
+                    if (i1 + i) % group_size == 0:
+                        self.quantizer.find_params(W[:, (i1 + i):(i1 + i + group_size)], weight=True)
+
+                    if ((i1 + i) // group_size) - now_idx == -1:
+                        if self.format == 'nf':
+                            scale.append(self.quantizer.scale)
+                        elif self.format == 'fp':
+                            scale.append(self.quantizer.scale)
+                            # zero.append(self.quantizer.zero)
+                        else: # int
+                            scale.append(self.quantizer.scale)
+                            zero.append(self.quantizer.zero)
+                        now_idx += 1
+
+                q = self.quantizer.quantize(w.unsqueeze(1)).flatten()
+                Q1[:, i] = q
+                Losses1[:, i] = (w - q) ** 2 
+
+            Q[:, i1:i2] = Q1
+            Losses[:, i1:i2] = Losses1 / 2
+
+            if os.environ.get("DEBUG"):
+                self.layer.weight.data[:, :i2] = Q[:, :i2]
+                self.layer.weight.data[:, i2:] = W[:, i2:]
+                logger.debug(torch.sum((self.layer(self.inp1) - self.out1) ** 2))
+                logger.debug(torch.sum(Losses))
+
+        torch.cuda.synchronize()
+        logger.info(f'duration: {(time.time() - tick)}')
+        logger.info(f'avg loss: {torch.sum(Losses).item()}')
+
+        group_size = group_size if group_size != -1 else self.columns
+        g_idx = [i // group_size for i in range(self.columns)]
+        g_idx = torch.tensor(g_idx, dtype=torch.int32, device=Q.device)
+        if actorder:
+            invperm = torch.argsort(perm)
+            Q = Q[:, invperm]
+            g_idx = g_idx[invperm]
+
+        if isinstance(self.layer, transformers.Conv1D):
+            Q = Q.t()
+        self.layer.weight.data = Q.reshape(self.layer.weight.shape).type_as(self.layer.weight.data)
+        if os.environ.get("DEBUG"):
+            logger.debug(torch.sum((self.layer(self.inp1) - self.out1) ** 2))
+
+        if self.format == 'nf':
+            if scale == []:
+                scale.append(self.quantizer.scale)
+            scale = torch.cat(scale, dim=1)
+            return scale, g_idx
+        elif self.format == 'fp':
+            if scale == []:
+                scale.append(self.quantizer.scale)
+                # zero.append(self.quantizer.zero)
+            scale = torch.cat(scale, dim=1)
+            # zero = torch.cat(zero, dim=1)
+            return scale, g_idx
+        else: # int
+            if scale == []:
+                scale.append(self.quantizer.scale)
+                zero.append(self.quantizer.zero)
+            scale = torch.cat(scale, dim=1)
+            zero = torch.cat(zero, dim=1)
+            return scale, zero, g_idx
+        
+
+    def fasterquant_gptq(
         self, blocksize=128, percdamp=.01, group_size=-1, actorder=False
     ):
         W = self.layer.weight.data.clone()

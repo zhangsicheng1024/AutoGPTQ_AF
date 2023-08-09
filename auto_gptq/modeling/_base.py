@@ -32,14 +32,17 @@ logger = getLogger(__name__)
 @dataclass
 class BaseQuantizeConfig(PushToHubMixin):
     bits: int = field(default=4, metadata={"choices": [2, 3, 4, 8]})
-    format: str = field(default='int', metadata={"choices": ['int', 'fp', 'nf']})
+    format: str = field(default='int', metadata={"choices": ['int', 'fp', 'nf', 'af']})
     group_size: int = field(default=-1)
     damp_percent: float = field(default=0.01)
-    desc_act: bool = field(default=True)
-    sym: bool = field(default=True)
+    desc_act: bool = field(default=False)
+    sym: bool = field(default=False)
     true_sequential: bool = field(default=True)
     model_name_or_path: Optional[str] = field(default=None)
     model_file_base_name: Optional[str] = field(default=None)
+    gptq_quant: bool = field(default=False)
+    percentile: Optional[float] = field(default=0.9)
+    format_prototype: Optional[str] = field(default='fp')
 
     def __post_init__(self):
         fields_info = fields(self)
@@ -104,6 +107,7 @@ class BaseQuantizeConfig(PushToHubMixin):
             "true_sequential": self.true_sequential,
             "model_name_or_path": self.model_name_or_path,
             "model_file_base_name": self.model_file_base_name,
+            "gptq_quant": self.gptq_quant,
         }
 
 
@@ -326,7 +330,7 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                 subset = {n: full[n] for n in names}
                 gptq = {}
                 for name in subset:
-                    gptq[name] = GPTQ(subset[name], self.quantize_config.format)
+                    gptq[name] = GPTQ(subset[name], self.quantize_config.format, self.quantize_config.gptq_quant)
                     if self.quantize_config.format == 'nf':
                         gptq[name].quantizer.configure(
                             self.quantize_config.bits,
@@ -335,6 +339,13 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                             mse=False,
                         )
                     elif self.quantize_config.format == 'fp':
+                        gptq[name].quantizer.configure(
+                            self.quantize_config.bits,
+                            perchannel=True,
+                            sym=self.quantize_config.sym,
+                            mse=False,
+                        )
+                    elif self.quantize_config.format == 'af':
                         gptq[name].quantizer.configure(
                             self.quantize_config.bits,
                             perchannel=True,
@@ -352,29 +363,29 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                 def add_batch(name):
                     def tmp(_, inp, out):
                         gptq[name].add_batch(inp[0].data, out.data)
-
                     return tmp
-
-                handles = []
-                for name in subset:
-                    handles.append(subset[name].register_forward_hook(add_batch(name)))
-                for j in range(num_batches):
-                    layer_input = move_to_device(layer_inputs[j], cur_layer_device)
-                    layer_attention_mask = move_to_device(attention_masks[j], cur_layer_device)
-                    additional_layer_inputs = {
-                        "attention_mask": layer_attention_mask
-                    }
-                    layer_position_ids = None if not position_ids else move_to_device(position_ids[j], cur_layer_device)
-                    if layer_position_ids is not None:
-                        additional_layer_inputs["position_ids"] = layer_position_ids
-                    for k, v in layer_input_kwargs[j].items():
-                        if isinstance(v, torch.Tensor):
-                            additional_layer_inputs[k] = move_to_device(v, cur_layer_device)
-                        else:
-                            additional_layer_inputs[k] = v
-                    layer(layer_input, **additional_layer_inputs)
-                for h in handles:
-                    h.remove()
+                
+                if self.quantize_config.gptq_quant == True:
+                    handles = []
+                    for name in subset:
+                        handles.append(subset[name].register_forward_hook(add_batch(name)))
+                    for j in range(num_batches):
+                        layer_input = move_to_device(layer_inputs[j], cur_layer_device)
+                        layer_attention_mask = move_to_device(attention_masks[j], cur_layer_device)
+                        additional_layer_inputs = {
+                            "attention_mask": layer_attention_mask
+                        }
+                        layer_position_ids = None if not position_ids else move_to_device(position_ids[j], cur_layer_device)
+                        if layer_position_ids is not None:
+                            additional_layer_inputs["position_ids"] = layer_position_ids
+                        for k, v in layer_input_kwargs[j].items():
+                            if isinstance(v, torch.Tensor):
+                                additional_layer_inputs[k] = move_to_device(v, cur_layer_device)
+                            else:
+                                additional_layer_inputs[k] = v
+                        layer(layer_input, **additional_layer_inputs)
+                    for h in handles:
+                        h.remove()
 
                 for name in subset:
                     logger.info(f'Quantizing {name} in layer {i + 1}/{len(layers)}...')
@@ -400,6 +411,15 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                             move_to_device(scale, CPU if force_layer_back_to_cpu else cur_layer_device),
                             move_to_device(g_idx, CPU if force_layer_back_to_cpu else cur_layer_device)
                         )
+                    elif self.quantize_config.format == 'af':
+                        gptq[name].fasterquant(
+                            group_size=self.quantize_config.group_size,
+                            percentile=self.quantize_config.percentile,
+                            format_prototype=self.quantize_config.format_prototype
+                        )
+                        quantizers[f'{self.layers_block_name}.{i}.{name}'] = (
+                            gptq[name].quantizer.to(CPU if force_layer_back_to_cpu else cur_layer_device)
+                        )
                     else: # int
                         scale, zero, g_idx = gptq[name].fasterquant(
                             percdamp=self.quantize_config.damp_percent,
@@ -413,32 +433,34 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                             move_to_device(g_idx, CPU if force_layer_back_to_cpu else cur_layer_device)
                         )
                     gptq[name].free()
-
-            for j in range(num_batches):
-                layer_input = move_to_device(layer_inputs[j], cur_layer_device)
-                layer_attention_mask = move_to_device(attention_masks[j], cur_layer_device)
-                additional_layer_inputs = {
-                    "attention_mask": layer_attention_mask
-                }
-                layer_position_ids = None if not position_ids else move_to_device(position_ids[j], cur_layer_device)
-                if layer_position_ids is not None:
-                    additional_layer_inputs["position_ids"] = layer_position_ids
-                for k, v in layer_input_kwargs[j].items():
-                    if isinstance(v, torch.Tensor):
-                        additional_layer_inputs[k] = move_to_device(v, cur_layer_device)
-                    else:
-                        additional_layer_inputs[k] = v
-                layer_output = move_to_device(
-                    layer(layer_input, **additional_layer_inputs)[0],
-                    cur_layer_device if cache_examples_on_gpu else CPU
-                )
-                layer_outputs.append(layer_output)
+            
+            if self.quantize_config.gptq_quant == True:
+                for j in range(num_batches):
+                    layer_input = move_to_device(layer_inputs[j], cur_layer_device)
+                    layer_attention_mask = move_to_device(attention_masks[j], cur_layer_device)
+                    additional_layer_inputs = {
+                        "attention_mask": layer_attention_mask
+                    }
+                    layer_position_ids = None if not position_ids else move_to_device(position_ids[j], cur_layer_device)
+                    if layer_position_ids is not None:
+                        additional_layer_inputs["position_ids"] = layer_position_ids
+                    for k, v in layer_input_kwargs[j].items():
+                        if isinstance(v, torch.Tensor):
+                            additional_layer_inputs[k] = move_to_device(v, cur_layer_device)
+                        else:
+                            additional_layer_inputs[k] = v
+                    layer_output = move_to_device(
+                        layer(layer_input, **additional_layer_inputs)[0],
+                        cur_layer_device if cache_examples_on_gpu else CPU
+                    )
+                    layer_outputs.append(layer_output)
 
             layers[i] = move_to_device(layer, CPU if force_layer_back_to_cpu else cur_layer_device)
             del layer
             del gptq
-            del layer_inputs
-            layer_inputs, layer_outputs = layer_outputs, []
+            if self.quantize_config.gptq_quant == True:
+                del layer_inputs
+                layer_inputs, layer_outputs = layer_outputs, []
             torch.cuda.empty_cache()
 
         if(pack):
@@ -712,8 +734,8 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                     model.seqlen = model_config[key]
                     break
         else:
-            logger.warning("can't get model's sequence length from model config, will set to 4096.")
-            model.seqlen = 4096
+            logger.warning("can't get model's sequence length from model config, will set to 2048.")
+            model.seqlen = 2048
         model.eval()
 
         return cls(model, False, quantize_config)
@@ -908,8 +930,8 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                     model.seqlen = model_config[key]
                     break
         else:
-            logger.warning("can't get model's sequence length from model config, will set to 4096.")
-            model.seqlen = 4096
+            logger.warning("can't get model's sequence length from model config, will set to 2048.")
+            model.seqlen = 2048
 
         # == step5: (optional) inject optimized module == #
         if inject_fused_attention:
