@@ -8,9 +8,6 @@ import torch.nn as nn
 import transformers
 
 from .quantizer import Quantizer
-from .quantizer_nf4 import Quantizer_nf4
-from .quantizer_fp4 import Quantizer_fp4
-from .quantizer_af4 import Quantizer_af4
 
 
 logger = getLogger(__name__)
@@ -34,10 +31,13 @@ class GPTQ:
         self.nsamples = 0
         self.format = format
         if format == 'nf':
+            from .quantizer_nf4 import Quantizer_nf4
             self.quantizer = Quantizer_nf4()
         elif format == 'fp':
+            from .quantizer_fp4 import Quantizer_fp4
             self.quantizer = Quantizer_fp4()
         elif format == 'af':
+            from .quantizer_af4 import Quantizer_af4
             self.quantizer = Quantizer_af4()
         else:
             self.quantizer = Quantizer()

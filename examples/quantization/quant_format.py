@@ -1,5 +1,4 @@
 import os
-
 from auto_gptq import AutoGPTQForCausalLM, BaseQuantizeConfig
 import numpy as np
 import torch
@@ -7,6 +6,8 @@ import torch.nn as nn
 import time
 from logging import getLogger
 logger = getLogger(__name__)
+
+CACHE_DIR = None #'/gptq_hub'
 
 # os.makedirs(quantized_model_dir, exist_ok=True)
 def get_wikitext2(nsamples, seed, seqlen, model):
@@ -221,18 +222,31 @@ def eval(model_name, model, eval_tasks):
 
     # ppl tasks, datasets = ['wikitext2', 'ptb', 'c4-new']
     datasets = []
-    if 'wikitext2' in eval_tasks: datasets.append('wikitext2')
-    if 'ptb' in eval_tasks: datasets.append('ptb')
-    if 'c4' in eval_tasks: datasets.append('c4')
-    if 'ptb-new' in eval_tasks: datasets.append('ptb-new')
-    if 'c4-new' in eval_tasks: datasets.append('c4-new')
+    if 'wikitext2' in eval_tasks: datasets.append('wikitext2'); eval_tasks.remove('wikitext2')
+    if 'ptb' in eval_tasks: datasets.append('ptb'); eval_tasks.remove('ptb')
+    if 'c4' in eval_tasks: datasets.append('c4'); eval_tasks.remove('c4')
+    if 'ptb-new' in eval_tasks: datasets.append('ptb-new'); eval_tasks.remove('ptb-new')
+    if 'c4-new' in eval_tasks: datasets.append('c4-new'); eval_tasks.remove('c4-new')
     from datautils import get_loaders
     for dataset in datasets:
         dataloader, testloader = get_loaders(
             dataset, seed=0, model=model_name, seqlen=2048
         )
         print(dataset)
-        llama_eval(model, testloader, 'cuda')
+        llama_eval(model, testloader, 'cuda:0')
+
+    if len(eval_tasks) == 0: return
+    model.name_or_path = model_name
+    if '70b' in model_name:
+        # load in 2 gpu
+        state_dict = model.state_dict()
+        from transformers import AutoModelForCausalLM
+        model = AutoModelForCausalLM.from_pretrained(model_name, device_map='auto', torch_dtype=torch.float16, cache_dir=CACHE_DIR)
+        print('device_map:')
+        print(model.hf_device_map)
+        model.load_state_dict(state_dict)
+    else:
+        model = model.to('cuda:0')
 
     # QA tasks, datasets = ['lambada_openai', 'piqa', 'hellaswag']
     datasets = []
@@ -240,18 +254,14 @@ def eval(model_name, model, eval_tasks):
     if 'piqa' in eval_tasks: datasets.append('piqa')
     if 'hellaswag' in eval_tasks: datasets.append('hellaswag')
     if len(datasets) > 0:
-        from transformers import AutoTokenizer
-        from utils import LMEvalAdaptor
         from lm_eval import evaluator
         import json
-        tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)
-        lm_eval_model = LMEvalAdaptor(model_name, model.cuda(), tokenizer, 2)
         results = evaluator.simple_evaluate(
-            model=lm_eval_model,
+            model=model,
+            model_args='use_accelerate=True',
             tasks=datasets,
-            batch_size=2,
-            no_cache=True,
-            num_fewshot=0
+            num_fewshot=0,
+            batch_size=2
         )
         dumped = json.dumps(results, indent=2)
         print('QA eval:')
@@ -261,17 +271,16 @@ def eval(model_name, model, eval_tasks):
     if 'mmlu' not in eval_tasks: return
     import json
     from lm_eval import tasks, evaluator, utils
-    tasks_ = 'hendrycksTest-*'
-    task_names = utils.pattern_match(tasks_.split(","), tasks.ALL_TASKS)
-    # task_names = ['hendrycksTest-world_religions']
-    print(f"Selected Tasks: {task_names}")
+    mmlu_tasks = utils.pattern_match('hendrycksTest-*'.split(","), tasks.ALL_TASKS)
+    # mmlu_tasks = ['hendrycksTest-abstract_algebra']
+    print(f"Selected Tasks: {mmlu_tasks}")
 
     results = evaluator.simple_evaluate(
-        model=model.to('cuda:0'),
+        model=model,
         model_args='use_accelerate=True',
-        tasks=task_names,
+        tasks=mmlu_tasks,
         num_fewshot=5,
-        batch_size=2,
+        batch_size=(1 if '70b' in model_name else 2)
     )
 
     # dumped = json.dumps(results, indent=2)
@@ -315,25 +324,31 @@ def eval(model_name, model, eval_tasks):
 def main():
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model', default='meta-llama/Llama-2-7b-hf', type=str)
-    parser.add_argument('--format', default='int', choices=['int', 'fp', 'nf'])
-    parser.add_argument('--group_size', default=128, type=int)
+    parser.add_argument('--model', default='meta-llama/Llama-2-7b-hf', type=str) # quant base model
+    parser.add_argument('--bits', default=4, choices=[3,4]) # 3bit fp/nf/af todo
+    parser.add_argument('--format', default='int', choices=['int', 'fp', 'nf', 'af']) # quantize model to int / nf / fp
+    parser.add_argument('--group_size', default=128, type=int) # it is recommended to set the value to 128
+    parser.add_argument('--gptq_quant', action='store_true') # use gptq or not, af quant can not use gptq currently (calculate hessian etc)
+    parser.add_argument('--percentile', default=0.9, type=float) # only active when using af format, not ready currently
+    parser.add_argument('--format_prototype', default='fp', type=str) # only active when using af format, int- or fp-like two-side quant bins
     parser.add_argument('--no_quant', action='store_true') # quant or only load&eval ori fp16 model
     parser.add_argument('--no_pack', action='store_true') # If only quant & eval in fp16, no pack. If need to save 4bit model, pack
-    parser.add_argument('--tasks', default='wikitext2', type=str) # all: wikitext2,ptb,c4-new,hellaswag,mmlu
+    parser.add_argument('--tasks', default='wikitext2', type=str) # all: wikitext2,ptb,c4,hellaswag,mmlu
     args = parser.parse_args()
 
     traindataset,testenc = get_wikitext2(128, 0, 2048, args.model)
 
     quantize_config = BaseQuantizeConfig(
-        bits=4,  # quantize model to 4-bit
-        format=args.format, # quantize model to int / nf / fp
-        group_size=args.group_size,  # it is recommended to set the value to 128
-        desc_act=False,  # desc_act and group size only works on triton
+        bits=args.bits,
+        format=args.format,
+        group_size=args.group_size,
+        gptq_quant=args.gptq_quant,
+        percentile=args.percentile,
+        format_prototype=args.format_prototype,
     )
 
     # load un-quantized model, the model will always be force loaded into cpu
-    model = AutoGPTQForCausalLM.from_pretrained(args.model, quantize_config)
+    model = AutoGPTQForCausalLM.from_pretrained(args.model, quantize_config, torch_dtype=torch.float16, cache_dir=CACHE_DIR)
 
     # quantize model
     if not args.no_quant:
@@ -345,7 +360,7 @@ def main():
     # save & load quantized model in fp16
     # model.model.save_pretrained('save/llama2_7b_fp4_fp16')
     # from transformers import AutoModelForCausalLM
-    # model.model = AutoModelForCausalLM.from_pretrained("save/llama2_7b_fp4_fp16")
+    # model = AutoModelForCausalLM.from_pretrained("save/llama2_7b_fp4_fp16", torch_dtype=torch.float16)
 
     # save & load quantized model in 4bit
     # model.save_quantized('save/llama2_7b_fp4_g128')
@@ -358,7 +373,7 @@ def main():
     # else: opt_eval(model.model, testenc, "cuda:0")
 
     # eval
-    if args.tasks == 'all': tasks = ['wikitext2', 'ptb', 'c4-new', 'hellaswag', 'mmlu']
+    if args.tasks == 'all': tasks = ['wikitext2', 'ptb', 'c4', 'hellaswag', 'mmlu']
     else: tasks = args.tasks.split(',')
     eval(args.model, model.model, tasks)
 
