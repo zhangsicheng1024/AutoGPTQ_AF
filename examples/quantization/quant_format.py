@@ -90,7 +90,7 @@ def llama_eval(model, testenc, dev, seqlen = 2048):
     position_ids = cache['position_ids']
 
     for i in tqdm(range(len(layers))):
-        print('layer', i)
+        # print('layer', i)
         layer = layers[i].to(dev)
 
         for j in range(nsamples):

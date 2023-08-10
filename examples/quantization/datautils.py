@@ -324,10 +324,14 @@ def set_seed(seed):
     torch.random.manual_seed(seed)
 
 
-def get_wikitext2(nsamples, seed, seqlen, model):
+def get_wikitext2(nsamples, seed, seqlen, model, yijia=False):
     from datasets import load_dataset
-    traindata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='train', cache_dir='/gptq/datasets')
-    testdata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test', cache_dir='/gptq/datasets')
+    if yijia:
+        traindata = load_dataset('/gptq/datasets/wikitext/wikitext-2-raw-v1', split='train')
+        testdata = load_dataset('/gptq/datasets/wikitext/wikitext-2-raw-v1', split='test')
+    else:
+        traindata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='train', cache_dir='/gptq/datasets')
+        testdata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test', cache_dir='/gptq/datasets')
 
     # ==========llama===================
     from transformers import LlamaTokenizer
@@ -353,10 +357,14 @@ def get_wikitext2(nsamples, seed, seqlen, model):
         trainloader.append((inp, tar))
     return trainloader, testenc
 
-def get_ptb(nsamples, seed, seqlen, model):
+def get_ptb(nsamples, seed, seqlen, model, yijia=False):
     from datasets import load_dataset
-    traindata = load_dataset('ptb_text_only', 'penn_treebank', split='train', cache_dir='/gptq/datasets')
-    valdata = load_dataset('ptb_text_only', 'penn_treebank', split='validation', cache_dir='/gptq/datasets')
+    if yijia:
+        traindata = load_dataset('/gptq/datasets/ptb_text_only/penn_treebank', split='train')
+        valdata = load_dataset('/gptq/datasets/ptb_text_only/penn_treebank', split='validation')
+    else:
+        traindata = load_dataset('ptb_text_only', 'penn_treebank', split='train', cache_dir='/gptq/datasets')
+        valdata = load_dataset('ptb_text_only', 'penn_treebank', split='validation', cache_dir='/gptq/datasets')
 
     # from transformers import AutoTokenizer 
     # tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
@@ -379,14 +387,18 @@ def get_ptb(nsamples, seed, seqlen, model):
         trainloader.append((inp, tar))
     return trainloader, testenc
 
-def get_c4(nsamples, seed, seqlen, model):
+def get_c4(nsamples, seed, seqlen, model, yijia=False):
     from datasets import load_dataset
-    traindata = load_dataset(
-        'allenai/c4', 'allenai--c4', data_files={'train': 'en/c4-train.00000-of-01024.json.gz'}, split='train', cache_dir='/gptq/datasets'
-    )
-    valdata = load_dataset(
-        'allenai/c4', 'allenai--c4', data_files={'validation': 'en/c4-validation.00000-of-00008.json.gz'}, split='validation', cache_dir='/gptq/datasets'
-    )
+    if yijia:
+        traindata = load_dataset('/gptq/datasets/allenai___c4/allenai--c4-f1e63450f0445e10', split='train')
+        valdata = load_dataset('/gptq/datasets/allenai___c4/allenai--c4-bb2c18885d90ccb6', split='validation')
+    else:
+        traindata = load_dataset(
+            'allenai/c4', 'allenai--c4', data_files={'train': 'en/c4-train.00000-of-01024.json.gz'}, split='train', cache_dir='/gptq/datasets'
+        )
+        valdata = load_dataset(
+            'allenai/c4', 'allenai--c4', data_files={'validation': 'en/c4-validation.00000-of-00008.json.gz'}, split='validation', cache_dir='/gptq/datasets'
+        )
 
     # from transformers import AutoTokenizer
     # tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
@@ -493,15 +505,15 @@ def get_c4_new(nsamples, seed, seqlen, model):
 
 
 def get_loaders(
-    name, nsamples=128, seed=0, seqlen=2048, model=''
+    name, nsamples=128, seed=0, seqlen=2048, model='', yijia=False
 ):
     if 'wikitext2' in name:
-        return get_wikitext2(nsamples, seed, seqlen, model)
+        return get_wikitext2(nsamples, seed, seqlen, model, yijia)
     if 'ptb' in name:
         if 'new' in name:
             return get_ptb_new(nsamples, seed, seqlen, model)
-        return get_ptb(nsamples, seed, seqlen, model)
+        return get_ptb(nsamples, seed, seqlen, model, yijia)
     if 'c4' in name:
         if 'new' in name:
             return get_c4_new(nsamples, seed, seqlen, model)
-        return get_c4(nsamples, seed, seqlen, model)
+        return get_c4(nsamples, seed, seqlen, model, yijia)
