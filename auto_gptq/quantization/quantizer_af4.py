@@ -65,9 +65,9 @@ class Quantizer_af4(nn.Module):
     
     def quantize(self, x, group_size, percentile, format_prototype):
         if format_prototype == "int":
-            code = create_afint_numbers(self.xmax, self.xmin).cuda()
+            code = create_afint_numbers(self.xmax, self.xmin, percentile).cuda()
         elif format_prototype == "fp":
-            code = create_affp_numbers(self.xmax, self.xmin).cuda()
+            code = create_affp_numbers(self.xmax, self.xmin, percentile).cuda()
         code = torch.reshape(code, (x.shape[0], 16))
         distances = torch.abs(x.unsqueeze(-1) - code.unsqueeze(1))
         idx = torch.argmin(distances, dim=-1)
