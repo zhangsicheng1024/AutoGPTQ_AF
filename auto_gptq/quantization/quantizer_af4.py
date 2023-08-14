@@ -63,16 +63,45 @@ class Quantizer_af4(nn.Module):
         self.xmax = xmax
         self.xmin = xmin
     
+    # def quantize(self, x, group_size, percentile, format_prototype):
+    #     if format_prototype == "int":
+    #         code = create_afint_numbers(self.xmax, self.xmin, percentile).cuda()
+    #     elif format_prototype == "fp":
+    #         code = create_affp_numbers(self.xmax, self.xmin, percentile).cuda()
+    #     code = torch.reshape(code, (x.shape[0], 16))
+    #     distances = torch.abs(x.unsqueeze(-1) - code.unsqueeze(1))
+    #     idx = torch.argmin(distances, dim=-1)
+    #     x = torch.gather(code, -1, idx)
+    #     return x
+
     def quantize(self, x, group_size, percentile, format_prototype):
-        if format_prototype == "int":
-            code = create_afint_numbers(self.xmax, self.xmin, percentile).cuda()
-        elif format_prototype == "fp":
-            code = create_affp_numbers(self.xmax, self.xmin, percentile).cuda()
-        code = torch.reshape(code, (x.shape[0], 16))
-        distances = torch.abs(x.unsqueeze(-1) - code.unsqueeze(1))
-        idx = torch.argmin(distances, dim=-1)
-        x = torch.gather(code, -1, idx)
-        return x
+        if group_size == -1:
+            if format_prototype == "int":
+                code = create_afint_numbers(self.xmax, self.xmin, percentile).cuda()
+            elif format_prototype == "fp":
+                code = create_affp_numbers(self.xmax, self.xmin, percentile).cuda()
+            code = torch.reshape(code, (x.shape[0], 16))
+            distances = torch.abs(x.unsqueeze(-1) - code.unsqueeze(1))
+            idx = torch.argmin(distances, dim=-1)
+            x = torch.gather(code, -1, idx)
+            return x
+        else:
+            split_tensors = torch.split(x, group_size, dim=1)
+            for i, split_tensor in enumerate(split_tensors):
+                # 找到最大值和最小值
+                max_val, _ = torch.max(split_tensor, dim=1)
+                min_val, _ = torch.min(split_tensor, dim=1)
+
+                if format_prototype == "int":
+                    code = create_afint_numbers(max_val, min_val, percentile).cuda()
+                elif format_prototype == "fp":
+                    code = create_affp_numbers(max_val, min_val, percentile).cuda()
+                code = torch.reshape(code, (split_tensor.shape[0], 16))
+                distances = torch.abs(split_tensor.unsqueeze(-1) - code.unsqueeze(1))
+                idx = torch.argmin(distances, dim=-1)
+                x_split_q = torch.gather(code, -1, idx)
+                x[:, i*group_size:(i+1)*group_size] = x_split_q
+            return x
 
     def enabled(self):
         return self.maxq > 0
