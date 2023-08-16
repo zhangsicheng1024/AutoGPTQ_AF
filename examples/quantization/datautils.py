@@ -330,8 +330,8 @@ def get_wikitext2(nsamples, seed, seqlen, model, yijia=False):
         traindata = load_dataset('/gptq/datasets/wikitext/wikitext-2-raw-v1', split='train')
         testdata = load_dataset('/gptq/datasets/wikitext/wikitext-2-raw-v1', split='test')
     else:
-        traindata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='train', cache_dir='/gptq/datasets')
-        testdata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test', cache_dir='/gptq/datasets')
+        traindata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='train')
+        testdata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')
 
     # ==========llama===================
     from transformers import LlamaTokenizer
@@ -363,8 +363,8 @@ def get_ptb(nsamples, seed, seqlen, model, yijia=False):
         traindata = load_dataset('/gptq/datasets/ptb_text_only/penn_treebank', split='train')
         valdata = load_dataset('/gptq/datasets/ptb_text_only/penn_treebank', split='validation')
     else:
-        traindata = load_dataset('ptb_text_only', 'penn_treebank', split='train', cache_dir='/gptq/datasets')
-        valdata = load_dataset('ptb_text_only', 'penn_treebank', split='validation', cache_dir='/gptq/datasets')
+        traindata = load_dataset('ptb_text_only', 'penn_treebank', split='train')
+        valdata = load_dataset('ptb_text_only', 'penn_treebank', split='validation')
 
     # from transformers import AutoTokenizer 
     # tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
@@ -394,10 +394,10 @@ def get_c4(nsamples, seed, seqlen, model, yijia=False):
         valdata = load_dataset('/gptq/datasets/allenai___c4/allenai--c4-bb2c18885d90ccb6', split='validation')
     else:
         traindata = load_dataset(
-            'allenai/c4', 'allenai--c4', data_files={'train': 'en/c4-train.00000-of-01024.json.gz'}, split='train', cache_dir='/gptq/datasets'
+            'allenai/c4', 'allenai--c4', data_files={'train': 'en/c4-train.00000-of-01024.json.gz'}, split='train'
         )
         valdata = load_dataset(
-            'allenai/c4', 'allenai--c4', data_files={'validation': 'en/c4-validation.00000-of-00008.json.gz'}, split='validation', cache_dir='/gptq/datasets'
+            'allenai/c4', 'allenai--c4', data_files={'validation': 'en/c4-validation.00000-of-00008.json.gz'}, split='validation'
         )
 
     # from transformers import AutoTokenizer
@@ -445,8 +445,8 @@ def get_c4(nsamples, seed, seqlen, model, yijia=False):
 
 def get_ptb_new(nsamples, seed, seqlen, model):
     from datasets import load_dataset
-    traindata = load_dataset('ptb_text_only', 'penn_treebank', split='train', cache_dir='/gptq/datasets')
-    testdata = load_dataset('ptb_text_only', 'penn_treebank', split='test', cache_dir='/gptq/datasets')
+    traindata = load_dataset('ptb_text_only', 'penn_treebank', split='train')
+    testdata = load_dataset('ptb_text_only', 'penn_treebank', split='test')
 
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
@@ -468,10 +468,10 @@ def get_ptb_new(nsamples, seed, seqlen, model):
 def get_c4_new(nsamples, seed, seqlen, model):
     from datasets import load_dataset
     traindata = load_dataset(
-        'allenai/c4', 'allenai--c4', data_files={'train': 'en/c4-train.00000-of-01024.json.gz'}, split='train', cache_dir='/gptq/datasets'
+        'allenai/c4', 'allenai--c4', data_files={'train': 'en/c4-train.00000-of-01024.json.gz'}, split='train'
     )
     valdata = load_dataset(
-        'allenai/c4', 'allenai--c4', data_files={'validation': 'en/c4-validation.00000-of-00008.json.gz'}, split='validation', cache_dir='/gptq/datasets'
+        'allenai/c4', 'allenai--c4', data_files={'validation': 'en/c4-validation.00000-of-00008.json.gz'}, split='validation'
     )
 
     from transformers import AutoTokenizer

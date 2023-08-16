@@ -80,7 +80,7 @@ class Quantizer_af4(nn.Module):
                 code = create_afint_numbers(self.xmax, self.xmin, percentile).cuda()
             elif format_prototype == "fp":
                 code = create_affp_numbers(self.xmax, self.xmin, percentile).cuda()
-            code = torch.reshape(code, (x.shape[0], 16))
+            # code = torch.reshape(code, (x.shape[0], 16))
             distances = torch.abs(x.unsqueeze(-1) - code.unsqueeze(1))
             idx = torch.argmin(distances, dim=-1)
             x = torch.gather(code, -1, idx)
@@ -96,7 +96,7 @@ class Quantizer_af4(nn.Module):
                     code = create_afint_numbers(max_val, min_val, percentile).cuda()
                 elif format_prototype == "fp":
                     code = create_affp_numbers(max_val, min_val, percentile).cuda()
-                code = torch.reshape(code, (split_tensor.shape[0], 16))
+                # code = torch.reshape(code, (split_tensor.shape[0], 16))
                 distances = torch.abs(split_tensor.unsqueeze(-1) - code.unsqueeze(1))
                 idx = torch.argmin(distances, dim=-1)
                 x_split_q = torch.gather(code, -1, idx)

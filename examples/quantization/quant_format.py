@@ -7,7 +7,7 @@ import time
 from logging import getLogger
 logger = getLogger(__name__)
 
-CACHE_DIR = None #'/gptq_hub'
+CACHE_DIR = None
 
 # os.makedirs(quantized_model_dir, exist_ok=True)
 def get_wikitext2(nsamples, seed, seqlen, model):
@@ -16,13 +16,13 @@ def get_wikitext2(nsamples, seed, seqlen, model):
     testdata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')
 
     from transformers import AutoTokenizer, LlamaTokenizer
-    if "llama" in model:
-        tokenizer = LlamaTokenizer.from_pretrained(model, use_fast=False)
-    else:
-        try:
-            tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
-        except:
-            tokenizer = AutoTokenizer.from_pretrained(model, use_fast=True)
+    # if "llama" in model:
+    #     tokenizer = LlamaTokenizer.from_pretrained(model, use_fast=False)
+    # else:
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
+    except:
+        tokenizer = AutoTokenizer.from_pretrained(model, use_fast=True)
     trainenc = tokenizer("\n\n".join(traindata['text']), return_tensors='pt')
     testenc = tokenizer("\n\n".join(testdata['text']), return_tensors='pt')
 
@@ -218,6 +218,7 @@ def opt_eval(model, testenc, dev, seqlen = 2048):
     model.config.use_cache = use_cache
 
 def eval(model_name, model, eval_tasks):
+    import gc
     time_start = time.time()
 
     # ppl tasks, datasets = ['wikitext2', 'ptb', 'c4-new']
@@ -234,6 +235,9 @@ def eval(model_name, model, eval_tasks):
         )
         print(dataset)
         llama_eval(model, testloader, 'cuda:0')
+
+    gc.collect()
+    torch.cuda.empty_cache()
 
     if len(eval_tasks) == 0: return
     model.name_or_path = model_name
@@ -266,6 +270,9 @@ def eval(model_name, model, eval_tasks):
         dumped = json.dumps(results, indent=2)
         print('QA eval:')
         print(dumped)
+
+    gc.collect()
+    torch.cuda.empty_cache()
 
     # MMLU tasks
     if 'mmlu' not in eval_tasks: return
@@ -325,9 +332,9 @@ def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', default='meta-llama/Llama-2-7b-hf', type=str) # quant base model
-    parser.add_argument('--bits', default=4, choices=[3,4]) # 3bit fp/nf/af todo
+    parser.add_argument('--bits', default=4, choices=[3,4], type=int) # 3bit fp/nf/af todo
     parser.add_argument('--format', default='int', choices=['int', 'fp', 'nf', 'af']) # quantize model to int / nf / fp
-    parser.add_argument('--group_size', default=128, type=int) # it is recommended to set the value to 128
+    parser.add_argument('--group_size', default=-1, type=int) # it is recommended to set the value to 128
     parser.add_argument('--gptq_quant', action='store_true') # use gptq or not, af quant can not use gptq currently (calculate hessian etc)
     parser.add_argument('--percentile', default=0.9, type=float) # only active when using af format, not ready currently
     parser.add_argument('--format_prototype', default='fp', type=str) # only active when using af format, int- or fp-like two-side quant bins
@@ -352,7 +359,8 @@ def main():
 
     # quantize model
     if not args.no_quant:
-        logger.info(f'Base model: {args.model}, Format: {args.format}, Group_size: {args.group_size}')
+        logger.info(f'Base model: {args.model}, Format: {args.format}{args.bits}, Group_size: {args.group_size}, GPTQ: {args.gptq_quant}')
+        if args.format == 'af': logger.info(f'percentile: {args.percentile}, format_prototype: {args.format_prototype}')
         time_start = time.time()
         model.quantize(traindataset, use_triton=False, pack=(not args.no_pack))
         logger.info('quant time: %fh' % ((time.time() - time_start) / 60. / 60.))

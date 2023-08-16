@@ -103,11 +103,6 @@ class GPTQ:
         if not self.quantizer.ready():
             self.quantizer.find_params(W, weight=True)
 
-
-        if actorder:
-            perm = torch.argsort(torch.diag(H), descending=True)
-            W = W[:, perm]
-
         Losses = torch.zeros_like(W)
         Q = torch.zeros_like(W)
 
@@ -162,10 +157,6 @@ class GPTQ:
         group_size = group_size if group_size != -1 else self.columns
         g_idx = [i // group_size for i in range(self.columns)]
         g_idx = torch.tensor(g_idx, dtype=torch.int32, device=Q.device)
-        if actorder:
-            invperm = torch.argsort(perm)
-            Q = Q[:, invperm]
-            g_idx = g_idx[invperm]
 
         if isinstance(self.layer, transformers.Conv1D):
             Q = Q.t()

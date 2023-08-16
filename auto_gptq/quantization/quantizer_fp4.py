@@ -42,9 +42,11 @@ class Quantizer_fp4(nn.Module):
         mse=False, norm=2.4, grid=100, maxshrink=.8,
         trits=False, exponet_bits=2, mantissa_bits=1
     ):
-        self.maxq = torch.tensor(2*2**(2**exponet_bits/2) * (2-(0.5)**(mantissa_bits))) # 12
-        self.quant_min = - 2**(2**exponet_bits/2) * (2-(0.5)**(mantissa_bits)) # -6
-        self.quant_max = 2**(2**exponet_bits/2) * (2-(0.5)**(mantissa_bits)) # 6
+        if bits == 4: exponet_bits=2; mantissa_bits=1
+        elif bits == 3: exponet_bits=2; mantissa_bits=0
+        self.maxq = torch.tensor(2*2**(2**exponet_bits/2) * (2-(0.5)**(mantissa_bits))) # fp4:12
+        self.quant_min = - 2**(2**exponet_bits/2) * (2-(0.5)**(mantissa_bits)) # fp4:-6
+        self.quant_max = 2**(2**exponet_bits/2) * (2-(0.5)**(mantissa_bits)) # fp4:6
         self.exponet_bits = exponet_bits
         self.mantissa_bits = mantissa_bits
 
@@ -90,8 +92,7 @@ class Quantizer_fp4(nn.Module):
         xmax[tmp] = +1
 
         # =========zyj============
-        self.scale = (xmax - xmin) / self.maxq
-        # self.zero = torch.round(- ( xmin + self.maxq / 2 ) / self.scale)
+        self.scale = 2 * torch.maximum(torch.abs(xmax), torch.abs(xmin)) / self.maxq
         self.zero = torch.zeros_like(self.scale)
         # ========================
 
