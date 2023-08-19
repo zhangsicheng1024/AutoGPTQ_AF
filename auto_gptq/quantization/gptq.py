@@ -111,6 +111,8 @@ class GPTQ:
         zero = []
         now_idx = 1
 
+        # old rtn
+        '''
         for i1 in range(0, self.columns, blocksize):
             i2 = min(i1 + blocksize, self.columns)
             count = i2 - i1
@@ -149,10 +151,31 @@ class GPTQ:
                 self.layer.weight.data[:, i2:] = W[:, i2:]
                 logger.debug(torch.sum((self.layer(self.inp1) - self.out1) ** 2))
                 logger.debug(torch.sum(Losses))
+        '''
+        # old rtn
+
+        # new rtn
+        if group_size == -1:
+            self.quantizer.find_params(W, weight=True)
+            Q = self.quantizer.quantize(W)
+        else:
+            split_tensors = torch.split(W, group_size, dim=1)
+            for i, split_tensor in enumerate(split_tensors):
+                self.quantizer.find_params(split_tensor, weight=True)
+                if self.format == 'nf':
+                    # TODO: append scale for nf4 2scale
+                    scale.append(self.quantizer.scale)
+                elif self.format == 'fp':
+                    scale.append(self.quantizer.scale)
+                else: # int
+                    scale.append(self.quantizer.scale)
+                    zero.append(self.quantizer.zero)
+                Q[:, i*group_size:(i+1)*group_size] = self.quantizer.quantize(split_tensor)
+        # new rtn
 
         torch.cuda.synchronize()
         logger.info(f'duration: {(time.time() - tick)}')
-        logger.info(f'avg loss: {torch.sum(Losses).item()}')
+        # logger.info(f'avg loss: {torch.sum(Losses).item()}')
 
         group_size = group_size if group_size != -1 else self.columns
         g_idx = [i // group_size for i in range(self.columns)]
@@ -172,9 +195,7 @@ class GPTQ:
         elif self.format == 'fp':
             if scale == []:
                 scale.append(self.quantizer.scale)
-                # zero.append(self.quantizer.zero)
             scale = torch.cat(scale, dim=1)
-            # zero = torch.cat(zero, dim=1)
             return scale, g_idx
         else: # int
             if scale == []:

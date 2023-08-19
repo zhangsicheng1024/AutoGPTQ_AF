@@ -41,6 +41,7 @@ class BaseQuantizeConfig(PushToHubMixin):
     model_name_or_path: Optional[str] = field(default=None)
     model_file_base_name: Optional[str] = field(default=None)
     gptq_quant: bool = field(default=False)
+    two_scale: bool = field(default=False)
     percentile: Optional[float] = field(default=0.9)
     format_prototype: Optional[str] = field(default='fp')
 
@@ -107,7 +108,7 @@ class BaseQuantizeConfig(PushToHubMixin):
             "true_sequential": self.true_sequential,
             "model_name_or_path": self.model_name_or_path,
             "model_file_base_name": self.model_file_base_name,
-            "gptq_quant": self.gptq_quant,
+            "gptq_quant": self.gptq_quant, # TODO
         }
 
 
@@ -337,6 +338,7 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                             perchannel=True,
                             sym=self.quantize_config.sym,
                             mse=False,
+                            two_scale=self.quantize_config.two_scale,
                         )
                     elif self.quantize_config.format == 'fp':
                         gptq[name].quantizer.configure(

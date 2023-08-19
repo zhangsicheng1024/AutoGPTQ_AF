@@ -336,6 +336,7 @@ def main():
     parser.add_argument('--format', default='int', choices=['int', 'fp', 'nf', 'af']) # quantize model to int / nf / fp
     parser.add_argument('--group_size', default=-1, type=int) # it is recommended to set the value to 128
     parser.add_argument('--gptq_quant', action='store_true') # use gptq or not, af quant can not use gptq currently (calculate hessian etc)
+    parser.add_argument('--two_scale', action='store_true') # use 2-scale for nf4
     parser.add_argument('--percentile', default=0.9, type=float) # only active when using af format, not ready currently
     parser.add_argument('--format_prototype', default='fp', type=str) # only active when using af format, int- or fp-like two-side quant bins
     parser.add_argument('--no_quant', action='store_true') # quant or only load&eval ori fp16 model
@@ -343,13 +344,12 @@ def main():
     parser.add_argument('--tasks', default='wikitext2', type=str) # all: wikitext2,ptb,c4,hellaswag,mmlu
     args = parser.parse_args()
 
-    traindataset,testenc = get_wikitext2(128, 0, 2048, args.model)
-
     quantize_config = BaseQuantizeConfig(
         bits=args.bits,
         format=args.format,
         group_size=args.group_size,
         gptq_quant=args.gptq_quant,
+        two_scale=args.two_scale,
         percentile=args.percentile,
         format_prototype=args.format_prototype,
     )
@@ -362,6 +362,7 @@ def main():
         logger.info(f'Base model: {args.model}, Format: {args.format}{args.bits}, Group_size: {args.group_size}, GPTQ: {args.gptq_quant}')
         if args.format == 'af': logger.info(f'percentile: {args.percentile}, format_prototype: {args.format_prototype}')
         time_start = time.time()
+        traindataset,testenc = get_wikitext2(128, 0, 2048, args.model)
         model.quantize(traindataset, use_triton=False, pack=(not args.no_pack))
         logger.info('quant time: %fh' % ((time.time() - time_start) / 60. / 60.))
 
