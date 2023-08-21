@@ -329,7 +329,8 @@ def main():
     parser.add_argument('--format', default='int', choices=['int', 'fp', 'nf', 'af']) # quantize model to int / nf / fp
     parser.add_argument('--group_size', default=128, type=int) # it is recommended to set the value to 128
     parser.add_argument('--gptq_quant', action='store_true') # use gptq or not, af quant can not use gptq currently (calculate hessian etc)
-    parser.add_argument('--percentile', default=0.9, type=float) # only active when using af format, not ready currently
+    parser.add_argument('--tensor_percentile', default=0.9, type=float) # only active when using af format, not ready currently
+    parser.add_argument('--group_percentile', default=1.0, type=float) # only active when using af format, not ready currently
     parser.add_argument('--format_prototype', default='fp', type=str) # only active when using af format, int- or fp-like two-side quant bins
     parser.add_argument('--no_quant', action='store_true') # quant or only load&eval ori fp16 model
     parser.add_argument('--no_pack', action='store_true') # If only quant & eval in fp16, no pack. If need to save 4bit model, pack
@@ -343,7 +344,8 @@ def main():
         format=args.format,
         group_size=args.group_size,
         gptq_quant=args.gptq_quant,
-        percentile=args.percentile,
+        tensor_percentile=args.tensor_percentile,
+        group_percentile=args.group_percentile,
         format_prototype=args.format_prototype,
     )
 

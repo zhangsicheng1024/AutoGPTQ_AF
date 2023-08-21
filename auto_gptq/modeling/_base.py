@@ -42,7 +42,8 @@ class BaseQuantizeConfig(PushToHubMixin):
     model_file_base_name: Optional[str] = field(default=None)
     gptq_quant: bool = field(default=False)
     two_scale: bool = field(default=False)
-    percentile: Optional[float] = field(default=0.9)
+    tensor_percentile: Optional[float] = field(default=0.9)
+    group_percentile: Optional[float] = field(default=1.0)
     format_prototype: Optional[str] = field(default='fp')
 
     def __post_init__(self):
@@ -416,7 +417,8 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                     elif self.quantize_config.format == 'af':
                         gptq[name].fasterquant(
                             group_size=self.quantize_config.group_size,
-                            percentile=self.quantize_config.percentile,
+                            tensor_percentile=self.quantize_config.tensor_percentile,
+                            group_percentile=self.quantize_config.group_percentile,
                             format_prototype=self.quantize_config.format_prototype
                         )
                         quantizers[f'{self.layers_block_name}.{i}.{name}'] = (
