@@ -47,13 +47,19 @@ def create_afint_numbers(xmax, xmin, percentile_max=0.9):
 #     result = torch.cat(result)
 #     return result
 
-def create_affp_numbers(xmax, xmin, group_percentile_max=1.0):
+def create_affp_numbers(bit_width, xmax, xmin, group_percentile_max=1.0):
     dtype = xmax.dtype
     dev = xmax.device
-    pos_scale = xmax * group_percentile_max / 6
-    neg_scale = xmin * group_percentile_max / 6
-    pos_base = torch.tensor([6, 4, 3, 2, 1.5, 1, 0.5, 0]).to(dtype).to(dev)
-    neg_base = torch.tensor([0, 0.5, 1, 1.5, 2, 3, 4, 6]).to(dtype).to(dev)
+    if bit_width == 4:
+        pos_scale = xmax * group_percentile_max / 6
+        neg_scale = xmin * group_percentile_max / 6
+        pos_base = torch.tensor([6, 4, 3, 2, 1.5, 1, 0.5, 0]).to(dtype).to(dev)
+        neg_base = torch.tensor([0, 0.5, 1, 1.5, 2, 3, 4, 6]).to(dtype).to(dev)
+    elif bit_width == 3:
+        pos_scale = xmax * group_percentile_max / 4
+        neg_scale = xmin * group_percentile_max / 4
+        pos_base = torch.tensor([4, 2, 1, 0]).to(dtype).to(dev)
+        neg_base = torch.tensor([0, 1, 2, 4]).to(dtype).to(dev)
     pos_code = torch.matmul(pos_scale.unsqueeze(1), pos_base.unsqueeze(0))
     neg_code = torch.matmul(neg_scale.unsqueeze(1), neg_base.unsqueeze(0))
     return torch.cat((pos_code, neg_code), 1)

@@ -78,14 +78,14 @@ class GPTQ:
         self.H += inp.matmul(inp.t())
     
     def fasterquant_af(
-        self, group_size=-1, tensor_percentile=0.9, group_percentile=1.0, format_prototype='int'
+        self, bit_width=4, group_size=-1, tensor_percentile=0.9, group_percentile=1.0, format_prototype='int'
     ):
         # groupsize: af grain
         # percentile: 
         # format_prototype: be int, fp, nf, or real tensor
         W = self.layer.weight.data.clone()
         self.quantizer.find_params(W, weight=True)
-        self.layer.weight.data = self.quantizer.quantize(W, group_size, tensor_percentile, group_percentile, format_prototype).type_as(self.layer.weight.data)
+        self.layer.weight.data = self.quantizer.quantize(W, bit_width, group_size, tensor_percentile, group_percentile, format_prototype).type_as(self.layer.weight.data)
         
 
     def fasterquant_rtn(

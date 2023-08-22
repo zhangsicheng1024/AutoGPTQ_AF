@@ -74,11 +74,12 @@ class Quantizer_af4(nn.Module):
     #     x = torch.gather(code, -1, idx)
     #     return x
 
-    def quantize(self, x, group_size, tensor_percentile, group_percentile, format_prototype):
+    def quantize(self, x, bit_width, group_size, tensor_percentile, group_percentile, format_prototype):
         max_value = x.max()
         min_value = x.min()
         clamp_max = max_value * tensor_percentile
         clamp_min = min_value * tensor_percentile
+        # x_lora = x - x.clamp(max=clamp_max, min=clamp_min)
         x = x.clamp(max=clamp_max, min=clamp_min)
 
         # if group_size == -1:
@@ -103,12 +104,13 @@ class Quantizer_af4(nn.Module):
             if format_prototype == "int":
                 code = create_afint_numbers(max_val, min_val, group_percentile).cuda()
             elif format_prototype == "fp":
-                code = create_affp_numbers(max_val, min_val, group_percentile).cuda()
+                code = create_affp_numbers(bit_width, max_val, min_val, group_percentile).cuda()
             # code = torch.reshape(code, (split_tensor.shape[0], 16))
             distances = torch.abs(split_tensor.unsqueeze(-1) - code.unsqueeze(1))
             idx = torch.argmin(distances, dim=-1)
             x_split_q = torch.gather(code, -1, idx)
             x[:, i*group_size:(i+1)*group_size] = x_split_q
+        # return x + x_lora
         return x
 
     def enabled(self):

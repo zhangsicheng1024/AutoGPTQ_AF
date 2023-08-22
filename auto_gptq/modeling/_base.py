@@ -416,6 +416,7 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                         )
                     elif self.quantize_config.format == 'af':
                         gptq[name].fasterquant(
+                            bit_width=self.quantize_config.bits,
                             group_size=self.quantize_config.group_size,
                             tensor_percentile=self.quantize_config.tensor_percentile,
                             group_percentile=self.quantize_config.group_percentile,

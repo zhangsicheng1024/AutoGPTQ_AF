@@ -325,7 +325,7 @@ def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', default='meta-llama/Llama-2-7b-hf', type=str) # quant base model
-    parser.add_argument('--bits', default=4, choices=[3,4], type=int) # 3bit fp/nf/af todo
+    parser.add_argument('--bits', default=4, choices=[3,4]) # 3bit fp/nf/af todo
     parser.add_argument('--format', default='int', choices=['int', 'fp', 'nf', 'af']) # quantize model to int / nf / fp
     parser.add_argument('--group_size', default=128, type=int) # it is recommended to set the value to 128
     parser.add_argument('--gptq_quant', action='store_true') # use gptq or not, af quant can not use gptq currently (calculate hessian etc)
@@ -365,10 +365,10 @@ def main():
     # model = AutoModelForCausalLM.from_pretrained("save/llama2_7b_fp4_fp16", torch_dtype=torch.float16)
 
     # save & load quantized model in 4bit
-    # model.save_quantized('save/llama2_7b_fp4_g128')
-    # model = AutoGPTQForCausalLM.from_quantized('save/llama2_7b_fp4_g128', device="cuda:0", use_triton=False, 
-    #     inject_fused_attention=False, inject_fused_mlp=False
-    # )
+    model.save_quantized('./save/llama2_13b_fp4_g128')
+    model = AutoGPTQForCausalLM.from_quantized('./save/llama2_13b_fp4_g128', device="cuda:0", use_triton=False, 
+        inject_fused_attention=False, inject_fused_mlp=False
+    )
 
     # wikitext eval for llama/opt, from ori augogptq code
     # if 'llama' in pretrained_model_dir: llama_eval(model.model, testenc, "cuda:0")
