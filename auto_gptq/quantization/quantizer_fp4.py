@@ -141,11 +141,13 @@ class Quantizer_fp4(nn.Module):
     def quantize(self, x):
         if self.ready():
             # return quantize(x, self.scale, self.zero, self.maxq)
-            # x, scale: [768, 1]
+            # x:        [in_feature, group_size] in rtn, [in_feature, 1] in gptq
+            # scale:    [in_feature, 1]
+
             x = CUDA.FloatingQuantize_T(
                 tensor=x,
-                scales=self.scale,
-                offsets=self.zero,
+                scales=self.scale.repeat(1, x.shape[1]),
+                offsets=self.zero.repeat(1, x.shape[1]),
                 exponent=self.exponet_bits,
                 mantissa=self.mantissa_bits,
                 minimum=self.quant_min,
@@ -157,8 +159,8 @@ class Quantizer_fp4(nn.Module):
 
             # q = CUDA.FloatingQuantize_T_Quant(
             #     tensor=x,
-            #     scales=self.scale,
-            #     offsets=self.zero,
+            #     scales=self.scale.repeat(1, x.shape[1]),
+            #     offsets=self.zero.repeat(1, x.shape[1]),
             #     exponent=self.exponet_bits,
             #     mantissa=self.mantissa_bits,
             #     minimum=self.quant_min,
@@ -167,8 +169,8 @@ class Quantizer_fp4(nn.Module):
             # )
             # x = CUDA.FloatingQuantize_T_Dequant(
             #     tensor=q,
-            #     scales=self.scale,
-            #     offsets=self.zero,
+            #     scales=self.scale.repeat(1, q.shape[1]),
+            #     offsets=self.zero.repeat(1, q.shape[1]),
             #     exponent=self.exponet_bits,
             #     mantissa=self.mantissa_bits,
             #     minimum=self.quant_min,
