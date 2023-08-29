@@ -41,13 +41,11 @@ class GPTQ:
             self.quantizer = Quantizer_af4()
         else:
             self.quantizer = Quantizer()
-        if format != 'af':
-            if gptq_quant == True:
-                self.fasterquant = self.fasterquant_gptq
-            else:
-                self.fasterquant = self.fasterquant_rtn
+
+        if gptq_quant == True:
+            self.fasterquant = self.fasterquant_gptq
         else:
-            self.fasterquant = self.fasterquant_af
+            self.fasterquant = self.fasterquant_rtn
 
     def add_batch(self, inp, out):
         if os.environ.get("DEBUG"):
@@ -167,6 +165,9 @@ class GPTQ:
                     scale.append(self.quantizer.scale)
                 elif self.format == 'fp':
                     scale.append(self.quantizer.scale)
+                elif self.format == 'af':
+                    # TODO 2 scale, etc.
+                    scale.append(self.quantizer.scale)
                 else: # int
                     scale.append(self.quantizer.scale)
                     zero.append(self.quantizer.zero)
@@ -193,6 +194,12 @@ class GPTQ:
             scale = torch.cat(scale, dim=1)
             return scale, g_idx
         elif self.format == 'fp':
+            if scale == []:
+                scale.append(self.quantizer.scale)
+            scale = torch.cat(scale, dim=1)
+            return scale, g_idx
+        elif self.format == 'af':
+            # TODO af 2 scale
             if scale == []:
                 scale.append(self.quantizer.scale)
             scale = torch.cat(scale, dim=1)
@@ -271,7 +278,8 @@ class GPTQ:
                             scale.append(self.quantizer.scale)
                         elif self.format == 'fp':
                             scale.append(self.quantizer.scale)
-                            # zero.append(self.quantizer.zero)
+                        elif self.format == 'af':
+                            scale.append(self.quantizer.scale)
                         else: # int
                             scale.append(self.quantizer.scale)
                             zero.append(self.quantizer.zero)
@@ -322,9 +330,12 @@ class GPTQ:
         elif self.format == 'fp':
             if scale == []:
                 scale.append(self.quantizer.scale)
-                # zero.append(self.quantizer.zero)
             scale = torch.cat(scale, dim=1)
-            # zero = torch.cat(zero, dim=1)
+            return scale, g_idx
+        elif self.format == 'af':
+            if scale == []:
+                scale.append(self.quantizer.scale)
+            scale = torch.cat(scale, dim=1)
             return scale, g_idx
         else: # int
             if scale == []:

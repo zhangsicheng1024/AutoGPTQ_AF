@@ -354,6 +354,10 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                             perchannel=True,
                             sym=self.quantize_config.sym,
                             mse=False,
+                            tensor_percentile=self.quantize_config.tensor_percentile,
+                            group_percentile=self.quantize_config.group_percentile,
+                            format_prototype=self.quantize_config.format_prototype,
+                            weight=subset[name].weight.data
                         )
                     else: # int
                         gptq[name].quantizer.configure(
@@ -415,15 +419,15 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                             move_to_device(g_idx, CPU if force_layer_back_to_cpu else cur_layer_device)
                         )
                     elif self.quantize_config.format == 'af':
-                        gptq[name].fasterquant(
-                            bit_width=self.quantize_config.bits,
+                        scale, g_idx = gptq[name].fasterquant(
+                            percdamp=self.quantize_config.damp_percent,
                             group_size=self.quantize_config.group_size,
-                            tensor_percentile=self.quantize_config.tensor_percentile,
-                            group_percentile=self.quantize_config.group_percentile,
-                            format_prototype=self.quantize_config.format_prototype
+                            actorder=self.quantize_config.desc_act
                         )
                         quantizers[f'{self.layers_block_name}.{i}.{name}'] = (
-                            gptq[name].quantizer.to(CPU if force_layer_back_to_cpu else cur_layer_device)
+                            gptq[name].quantizer.to(CPU if force_layer_back_to_cpu else cur_layer_device),
+                            move_to_device(scale, CPU if force_layer_back_to_cpu else cur_layer_device),
+                            move_to_device(g_idx, CPU if force_layer_back_to_cpu else cur_layer_device)
                         )
                     else: # int
                         scale, zero, g_idx = gptq[name].fasterquant(
