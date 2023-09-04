@@ -332,12 +332,12 @@ def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', default='meta-llama/Llama-2-7b-hf', type=str) # quant base model
-    parser.add_argument('--bits', default=4, choices=[3,4], type=int) # 3bit fp/nf/af todo
+    parser.add_argument('--bits', default=4, choices=[2,3,4], type=int) # 3bit fp/nf/af todo
     parser.add_argument('--format', default='int', choices=['int', 'fp', 'nf', 'af']) # quantize model to int / nf / fp
     parser.add_argument('--group_size', default=-1, type=int) # it is recommended to set the value to 128
     parser.add_argument('--gptq_quant', action='store_true') # use gptq or not, af quant can not use gptq currently (calculate hessian etc)
     parser.add_argument('--two_scale', action='store_true') # use 2-scale for nf4
-    parser.add_argument('--tensor_percentile', default=0.9, type=float) # only active when using af format, not ready currently
+    parser.add_argument('--tensor_percentile', default=1.0, type=float) # only active when using af format, not ready currently
     parser.add_argument('--group_percentile', default=1.0, type=float) # only active when using af format, not ready currently
     parser.add_argument('--format_prototype', default='fp', type=str) # only active when using af format, int- or fp-like two-side quant bins
     parser.add_argument('--no_quant', action='store_true') # quant or only load&eval ori fp16 model
@@ -362,7 +362,7 @@ def main():
     # quantize model
     if not args.no_quant:
         logger.info(f'Base model: {args.model}, Format: {args.format}{args.bits}, Group_size: {args.group_size}, GPTQ: {args.gptq_quant}')
-        if args.format == 'af': logger.info(f'percentile: {args.percentile}, format_prototype: {args.format_prototype}')
+        if args.format == 'af': logger.info(f'format_prototype: {args.format_prototype}, tensor_percentile: {args.tensor_percentile}, group_percentile: {args.group_percentile}')
         time_start = time.time()
         traindataset,testenc = get_wikitext2(128, 0, 2048, args.model)
         model.quantize(traindataset, use_triton=False, pack=(not args.no_pack))

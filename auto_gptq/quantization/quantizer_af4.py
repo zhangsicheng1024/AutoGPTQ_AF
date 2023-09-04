@@ -21,7 +21,7 @@ def quantize(x, scale_pos, scale_neg, code):
 
     q_pos = q_pos.reshape(-1,1) # [in_channel * group_size, 1]
     distance = torch.abs(q_pos - code) # [in_channel * group_size, code_size]
-    idx = torch.argmin(distance, dim=-1)
+    idx = torch.argmin(distance, dim=-1) # [in_channel * group_size]
     q_pos = torch.gather(code, -1, idx)
     q_pos = q_pos.reshape(shape) # [in_channel * group_size, 1]
 
@@ -32,6 +32,18 @@ def quantize(x, scale_pos, scale_neg, code):
     q_neg = q_neg.reshape(shape)
 
     q = q_pos * scale_pos + q_neg * scale_neg
+    return q
+
+def quantize_2bit(x, code):
+    # x: [in_channel, group_size]
+    # code: [in_channel, 4]
+    group_size = x.shape[1]
+    x_ = x.unsqueeze(-1).repeat(1,1,4) # [in_channel, group_size, 4]
+    code_ = code.unsqueeze(1).repeat(1, group_size, 1) # [in_channel, group_size, 4]
+    distance = torch.abs(x_ - code_) # [in_channel, group_size, 4]
+    idx = torch.argmin(distance, dim=-1) # [in_channel, group_size]
+    q = torch.gather(code, 1, idx) # [in_channel, group_size]
+
     return q
 
 class Quantizer_af4(nn.Module):
@@ -115,8 +127,15 @@ class Quantizer_af4(nn.Module):
 
         # TODO: calculate scale and return for pack
         self.scale = torch.maximum(torch.abs(xmax), torch.abs(xmin))
+
+        # for 4bit/3bit 2 scale, [in_channel, 1]
         self.scale_pos = torch.abs(xmax) / (self.maxq / 2)
         self.scale_neg = torch.abs(xmin) / (self.maxq / 2)
+        
+        # for 2bit, self.code_2bit: [in_channel, 4]
+        abs_max = torch.where(xmax.abs()>xmin.abs(), xmax, xmin)
+        abs_max = abs_max / 2
+        self.code_2bit = torch.cat((xmax.unsqueeze(1), xmin.unsqueeze(1), abs_max.unsqueeze(1), torch.zeros_like(xmax).unsqueeze(1)), 1)
 
         if weight:
             shape = [-1] + [1] * (len(shape) - 1)
@@ -127,6 +146,8 @@ class Quantizer_af4(nn.Module):
 
     def quantize(self, x):
         x = x.clamp(max=self.tensor_max, min=self.tensor_min)
+        if(self.bits == 2):
+            return quantize_2bit(x, self.code_2bit)
         return quantize(x, self.scale_pos, self.scale_neg, self.code)
 
         # x = x.clamp(max=self.tensor_max, min=self.tensor_min)
