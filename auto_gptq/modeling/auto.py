@@ -15,6 +15,7 @@ from .rw import RWGPTQForCausalLM
 from .gpt_bigcode import GPTBigCodeGPTQForCausalLM
 from .baichuan import BaiChuanGPTQForCausalLM
 from .internlm import InternLMGPTQForCausalLM
+from .mpt import MPTGPTQForCausalLM
 
 GPTQ_CAUSAL_LM_MODEL_MAP = {
     "bloom": BloomGPTQForCausalLM,
@@ -30,6 +31,7 @@ GPTQ_CAUSAL_LM_MODEL_MAP = {
     "RefinedWeb": RWGPTQForCausalLM,
     "baichuan": BaiChuanGPTQForCausalLM,
     "internlm": InternLMGPTQForCausalLM,
+    "mpt": MPTGPTQForCausalLM,
 }
 
 
@@ -47,7 +49,7 @@ class AutoGPTQForCausalLM:
         pretrained_model_name_or_path: str,
         quantize_config: BaseQuantizeConfig,
         max_memory: Optional[dict] = None,
-        trust_remote_code: bool = False,
+        trust_remote_code: bool = True,
         **model_init_kwargs
     ) -> BaseGPTQForCausalLM:
         model_type = check_and_get_model_type(

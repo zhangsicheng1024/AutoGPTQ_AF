@@ -7,7 +7,43 @@ import torch.nn as nn
 logger = getLogger(__name__)
 
 
-def quantize(x, scale):
+def quantize_3bit(x, scale): 
+    dev = x.device
+    q = x / scale
+    q = torch.where(q >= 0.8114928305149078, torch.tensor(1.0).to(dev), q) 
+    q = torch.where((q < 0.8114928305149078) & (q >= 0.5024898052215576), torch.tensor(0.6229856610298157).to(dev), q) 
+    q = torch.where((q < 0.5024898052215576) & (q >= 0.2826657369732857), torch.tensor(0.3819939494132996).to(dev), q) 
+    q = torch.where((q < 0.2826657369732857) & (q >= 0.0916687622666359), torch.tensor(0.1833375245332718).to(dev), q) 
+    q = torch.where((q < 0.0916687622666359) & (q >= -0.1234657019376755), torch.tensor(0).to(dev), q) 
+    q = torch.where((q < -0.1234657019376755) & (q >= -0.39097706973552704), torch.tensor(-0.2469314038753510).to(dev), q) 
+    q = torch.where((q < -0.39097706973552704) & (q >= -0.7675113677978516), torch.tensor(-0.5350227355957031).to(dev), q) 
+    q = torch.where(q < -0.7675113677978516, torch.tensor(-1.0).to(dev), q) 
+    return q * scale
+
+def quantize_3bit_2scale(x, scale_pos, scale_neg):
+    dev = x.device
+    x_pos = torch.zeros_like(x)
+    x_neg = torch.zeros_like(x)
+    x_pos = torch.where(x >= 0, x, x_pos)
+    x_neg = torch.where(x < 0, x, x_neg)
+    q_pos = x_pos / scale_pos
+    q_neg = x_neg / scale_neg
+
+    q_pos = torch.where(q_pos >= 0.8114928305149078,                                    torch.tensor(1.0).to(dev), q_pos) 
+    q_pos = torch.where((q_pos < 0.8114928305149078) & (q_pos >= 0.5024898052215576),   torch.tensor(0.6229856610298157).to(dev), q_pos) 
+    q_pos = torch.where((q_pos < 0.5024898052215576) & (q_pos >= 0.2826657369732857),   torch.tensor(0.3819939494132996).to(dev), q_pos) 
+    q_pos = torch.where((q_pos < 0.2826657369732857) & (q_pos >= 0.0916687622666359),   torch.tensor(0.1833375245332718).to(dev), q_pos) 
+    q_pos = torch.where(q_pos < 0.0916687622666359,                                     torch.tensor(0).to(dev), q_pos) 
+
+    q_neg = torch.where(q_neg >= -0.1234657019376755,                                       torch.tensor(0).to(dev), q_neg) 
+    q_neg = torch.where((q_neg < -0.1234657019376755) & (q_neg >= -0.39097706973552704),    torch.tensor(-0.2469314038753510).to(dev), q_neg) 
+    q_neg = torch.where((q_neg < -0.39097706973552704) & (q_neg >= -0.7675113677978516),    torch.tensor(-0.5350227355957031).to(dev), q_neg) 
+    q_neg = torch.where(q_neg < -0.7675113677978516,                                        torch.tensor(-1.0).to(dev), q_neg) 
+
+    q = q_pos * scale_pos + q_neg * scale_neg
+    return q
+
+def quantize_4bit(x, scale):
     dev = x.device
     q = x / scale
     q = torch.where(q >= 0.8614784181118011,                                    torch.tensor(1.0).to(dev), q)
@@ -28,7 +64,7 @@ def quantize(x, scale):
     q = torch.where(q < -0.8480964004993439,                                    torch.tensor(-1.0).to(dev), q)
     return q * scale 
 
-def quantize_2scale(x, scale_pos, scale_neg):
+def quantize_4bit_2scale(x, scale_pos, scale_neg):
     dev = x.device
     x_pos = torch.zeros_like(x)
     x_neg = torch.zeros_like(x)
@@ -73,6 +109,7 @@ class Quantizer_nf4(nn.Module):
         trits=False,
         two_scale=False
     ):
+        self.bits = bits
         self.perchannel = perchannel
         self.sym = sym
         self.mse = mse
@@ -146,10 +183,16 @@ class Quantizer_nf4(nn.Module):
 
     def quantize(self, x):
         if self.ready():
-            if self.two_scale: 
-                return quantize_2scale(x, self.scale_pos, self.scale_neg)
-            else: 
-                return quantize(x, self.scale)
+            if self.bits == 4:
+                if self.two_scale: 
+                    return quantize_4bit_2scale(x, self.scale_pos, self.scale_neg)
+                else: 
+                    return quantize_4bit(x, self.scale)
+            else:
+                if self.two_scale: 
+                    return quantize_3bit_2scale(x, self.scale_pos, self.scale_neg)
+                else: 
+                    return quantize_3bit(x, self.scale)
         return x
 
     def enabled(self):

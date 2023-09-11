@@ -334,12 +334,13 @@ def get_wikitext2(nsamples, seed, seqlen, model, yijia=False):
         testdata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')
 
     # ==========llama===================
-    from transformers import LlamaTokenizer
-    tokenizer = LlamaTokenizer.from_pretrained(model, use_fast=False)
+    # from transformers import LlamaTokenizer
+    # tokenizer = LlamaTokenizer.from_pretrained(model, use_fast=False)
     # ==================================
 
-    # from transformers import AutoTokenizer 
-    # tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
+    from transformers import AutoTokenizer 
+    try: tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
+    except: tokenizer = AutoTokenizer.from_pretrained(model, use_fast=True)
 
 
     trainenc = tokenizer("\n\n".join(traindata['text']), return_tensors='pt')
@@ -349,7 +350,7 @@ def get_wikitext2(nsamples, seed, seqlen, model, yijia=False):
     random.seed(seed)
     trainloader = []
     for _ in tqdm(range(nsamples)):
-        i = random.randint(0, trainenc.input_ids.shape[1] - seqlen - 1)
+        i = random.randint(0, trainenc.input_ids.shape[1] - seqlen)
         j = i + seqlen
         inp = trainenc.input_ids[:, i:j]
         tar = inp.clone()
@@ -366,11 +367,12 @@ def get_ptb(nsamples, seed, seqlen, model, yijia=False):
         traindata = load_dataset('ptb_text_only', 'penn_treebank', split='train')
         valdata = load_dataset('ptb_text_only', 'penn_treebank', split='validation')
 
-    # from transformers import AutoTokenizer 
-    # tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
+    from transformers import AutoTokenizer 
+    try: tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
+    except: tokenizer = AutoTokenizer.from_pretrained(model, use_fast=True)
     # ==========llama===================
-    from transformers import LlamaTokenizer
-    tokenizer = LlamaTokenizer.from_pretrained(model, use_fast=False)
+    # from transformers import LlamaTokenizer
+    # tokenizer = LlamaTokenizer.from_pretrained(model, use_fast=False)
     # ==================================
     trainenc = tokenizer("\n\n".join(traindata['sentence']), return_tensors='pt')
     testenc = tokenizer("\n\n".join(valdata['sentence']), return_tensors='pt')
@@ -379,7 +381,7 @@ def get_ptb(nsamples, seed, seqlen, model, yijia=False):
     random.seed(seed)
     trainloader = []
     for _ in tqdm(range(nsamples)):
-        i = random.randint(0, trainenc.input_ids.shape[1] - seqlen - 1)
+        i = random.randint(0, trainenc.input_ids.shape[1] - seqlen)
         j = i + seqlen
         inp = trainenc.input_ids[:, i:j]
         tar = inp.clone()
@@ -400,11 +402,12 @@ def get_c4(nsamples, seed, seqlen, model, yijia=False):
             'allenai/c4', 'allenai--c4', data_files={'validation': 'en/c4-validation.00000-of-00008.json.gz'}, split='validation'
         )
 
-    # from transformers import AutoTokenizer
-    # tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
+    from transformers import AutoTokenizer
+    try: tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
+    except: tokenizer = AutoTokenizer.from_pretrained(model, use_fast=True)
     # ==========llama===================
-    from transformers import LlamaTokenizer
-    tokenizer = LlamaTokenizer.from_pretrained(model, use_fast=False)
+    # from transformers import LlamaTokenizer
+    # tokenizer = LlamaTokenizer.from_pretrained(model, use_fast=False)
     # ==================================
 
     import random
@@ -416,7 +419,7 @@ def get_c4(nsamples, seed, seqlen, model, yijia=False):
             trainenc = tokenizer(traindata[i]['text'], return_tensors='pt')
             if trainenc.input_ids.shape[1] >= seqlen:
                 break
-        i = random.randint(0, trainenc.input_ids.shape[1] - seqlen - 1)
+        i = random.randint(0, trainenc.input_ids.shape[1] - seqlen)
         j = i + seqlen
         inp = trainenc.input_ids[:, i:j]
         tar = inp.clone()
