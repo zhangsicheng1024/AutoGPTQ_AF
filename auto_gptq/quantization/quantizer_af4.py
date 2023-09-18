@@ -22,8 +22,8 @@ def quantize(x, scale_pos, scale_neg, code):
     q_pos = q_pos.reshape(-1,1) # [in_channel * group_size, 1]
     distance = torch.abs(q_pos - code) # [in_channel * group_size, code_size]
     idx = torch.argmin(distance, dim=-1) # [in_channel * group_size]
-    q_pos = torch.gather(code, -1, idx)
-    q_pos = q_pos.reshape(shape) # [in_channel * group_size, 1]
+    q_pos = torch.gather(code, -1, idx) # [in_channel * group_size]
+    q_pos = q_pos.reshape(shape) # [in_channel, group_size]
 
     q_neg = q_neg.reshape(-1,1)
     distance = torch.abs(q_neg - code)
@@ -31,8 +31,8 @@ def quantize(x, scale_pos, scale_neg, code):
     q_neg = torch.gather(code, -1, idx)
     q_neg = q_neg.reshape(shape)
 
-    q = q_pos * scale_pos + q_neg * scale_neg
-    return q
+    xq = q_pos * scale_pos + q_neg * scale_neg
+    return xq
 
 def quantize_2bit(x, code):
     # x: [in_channel, group_size]
@@ -42,9 +42,9 @@ def quantize_2bit(x, code):
     code_ = code.unsqueeze(1).repeat(1, group_size, 1) # [in_channel, group_size, 4]
     distance = torch.abs(x_ - code_) # [in_channel, group_size, 4]
     idx = torch.argmin(distance, dim=-1) # [in_channel, group_size]
-    q = torch.gather(code, 1, idx) # [in_channel, group_size]
+    xq = torch.gather(code, 1, idx) # [in_channel, group_size]
 
-    return q
+    return xq
 
 class Quantizer_af4(nn.Module):
 

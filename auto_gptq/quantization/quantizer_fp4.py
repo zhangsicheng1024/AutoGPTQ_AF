@@ -7,26 +7,20 @@ from .ffi import *
 
 logger = getLogger(__name__)
 
-# Seems this simple RTN fp quant doesn't perform well, use ppq fp quant CUDA kernel instead
-# def quantize(x, scale, zero, maxq):
-#     dev = x.device
-#     q = x / scale
-#     q = torch.where(q >= 5,                             torch.tensor(6.).to(dev), q)
-#     q = torch.where((q < 5)         & (q >= 3.5),       torch.tensor(4.).to(dev), q)
-#     q = torch.where((q < 3.5)       & (q >= 2.5),       torch.tensor(3.).to(dev), q)
-#     q = torch.where((q < 2.5)       & (q >= 1.75),      torch.tensor(2.).to(dev), q)
-#     q = torch.where((q < 1.75)      & (q >= 1.25),      torch.tensor(1.5).to(dev), q)
-#     q = torch.where((q < 1.25)      & (q >= 0.75),     torch.tensor(1.).to(dev), q)
-#     q = torch.where((q < 0.75)     & (q >= 0.25),     torch.tensor(0.5).to(dev), q)
-#     q = torch.where((q < 0.25)     & (q >= -0.25),    torch.tensor(0.).to(dev), q)
-#     q = torch.where((q < -0.25)    & (q >= -0.75),    torch.tensor(-0.5).to(dev), q)
-#     q = torch.where((q < -0.75)    & (q >= -1.25),     torch.tensor(-1.).to(dev), q)
-#     q = torch.where((q < -1.25)     & (q >= -1.75),     torch.tensor(-1.5).to(dev), q)
-#     q = torch.where((q < -1.75)     & (q >= -2.5),      torch.tensor(-2.).to(dev), q)
-#     q = torch.where((q < -2.5)      & (q >= -3.5),      torch.tensor(-3.).to(dev), q)
-#     q = torch.where((q < -2.5)      & (q >= -5),        torch.tensor(-4.).to(dev), q)
-#     q = torch.where(q < -5,                             torch.tensor(-6.).to(dev), q)
-#     return scale * q
+def quantize(x, scale, code):
+    dev = x.device
+    shape = x.shape # [in_channel, group_size] in rtn, [in_channel, 1] in gptq
+    code = code.to(dev)
+    q = x / scale
+
+    q = q.reshape(-1,1) # [in_channel * group_size, 1]
+    distance = torch.abs(q - code) # [in_channel * group_size, code_size]
+    idx = torch.argmin(distance, dim=-1) # [in_channel * group_size]
+    q = torch.gather(code, -1, idx) # [in_channel * group_size]
+    q = q.reshape(shape) # [in_channel, group_size]
+
+    xq = q * scale
+    return xq
 
 class Quantizer_fp4(nn.Module):
 
@@ -42,6 +36,7 @@ class Quantizer_fp4(nn.Module):
         mse=False, norm=2.4, grid=100, maxshrink=.8,
         trits=False, exponet_bits=2, mantissa_bits=1
     ):
+        self.bits = bits
         if bits == 4: exponet_bits=2; mantissa_bits=1
         elif bits == 3: exponet_bits=2; mantissa_bits=0
         self.maxq = torch.tensor(2*2**(2**exponet_bits/2) * (2-(0.5)**(mantissa_bits))) # fp4:12
@@ -58,6 +53,13 @@ class Quantizer_fp4(nn.Module):
         self.maxshrink = maxshrink
         if trits:
             self.maxq = torch.tensor(-1)
+
+        if self.bits == 4:
+            self.maxq = torch.tensor(12)
+            self.code = torch.tensor([-6, -4, -3, -2, -1.5, -1, -0.5, -0, 0, 0.5, 1, 1.5, 2, 3, 4, 6], dtype=torch.float16)
+        elif self.bits == 3:
+            self.maxq = torch.tensor(8)
+            self.code = torch.tensor([-4, -2, -1, -0, 0, 1, 2, 4], dtype=torch.float16)
 
     def find_params(self, x, weight=False):
         dev = x.device
@@ -140,20 +142,20 @@ class Quantizer_fp4(nn.Module):
 
     def quantize(self, x):
         if self.ready():
-            # return quantize(x, self.scale, self.zero, self.maxq)
+            return quantize(x, self.scale, self.code)
             # x:        [in_feature, group_size] in rtn, [in_feature, 1] in gptq
             # scale:    [in_feature, 1]
 
-            x = CUDA.FloatingQuantize_T(
-                tensor=x,
-                scales=self.scale.repeat(1, x.shape[1]),
-                offsets=self.zero.repeat(1, x.shape[1]),
-                exponent=self.exponet_bits,
-                mantissa=self.mantissa_bits,
-                minimum=self.quant_min,
-                maximum=self.quant_max,
-                rounding=0
-            )
+            # x = CUDA.FloatingQuantize_T(
+            #     tensor=x,
+            #     scales=self.scale.repeat(1, x.shape[1]),
+            #     offsets=self.zero.repeat(1, x.shape[1]),
+            #     exponent=self.exponet_bits,
+            #     mantissa=self.mantissa_bits,
+            #     minimum=self.quant_min,
+            #     maximum=self.quant_max,
+            #     rounding=0
+            # )
 
             # is equal to quant + dequant:
 
