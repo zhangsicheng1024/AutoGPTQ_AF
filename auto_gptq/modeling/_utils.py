@@ -57,6 +57,7 @@ def make_quant(
     format: str,
     group_size,
     name='',
+    two_scale=False,
     use_triton=False,
     use_cuda_fp16=True,
     desc_act=False,
@@ -83,10 +84,10 @@ def make_quant(
                 out_features = tmp.weight.shape[1]
             if (not(desc_act) or group_size == -1) and not use_triton:
                 new_layer = QuantLinear(
-                    bits, group_size, in_features, out_features, True, use_cuda_fp16=use_cuda_fp16, trainable=trainable
+                    bits, group_size, in_features, out_features, True, two_scale=two_scale, use_cuda_fp16=use_cuda_fp16, trainable=trainable
                 )
             else:
-                new_layer = QuantLinear(bits, group_size, in_features, out_features, True, trainable=trainable)
+                new_layer = QuantLinear(bits, group_size, in_features, out_features, True, two_scale=two_scale, trainable=trainable)
             new_layer.device = ori_layer_device
             setattr(module, attr, new_layer.to(ori_layer_device))
     for name1, child in module.named_children():
@@ -97,6 +98,7 @@ def make_quant(
             format,
             group_size,
             name + '.' + name1 if name != '' else name1,
+            two_scale=two_scale,
             use_triton=use_triton,
             use_cuda_fp16=use_cuda_fp16,
             desc_act=desc_act,
@@ -110,6 +112,7 @@ def pack_model(
     bits,
     format,
     group_size,
+    two_scale=False,
     use_triton=False,
     use_cuda_fp16=True,
     desc_act=False,
@@ -124,7 +127,7 @@ def pack_model(
     logger.info('Packing model...')
     layers = find_layers(model)
     layers = {n: layers[n] for n in quantizers}
-    make_quant(model, quantizers, bits, format, group_size, use_triton=use_triton, use_cuda_fp16=use_cuda_fp16, desc_act=desc_act)
+    make_quant(model, quantizers, bits, format, group_size, two_scale=two_scale, use_triton=use_triton, use_cuda_fp16=use_cuda_fp16, desc_act=desc_act)
     qlayers = find_layers(model, [QuantLinear])
     for name in qlayers:
         logger.info(name)
@@ -132,9 +135,9 @@ def pack_model(
         layer_device = qlayers[name].device
         qlayers[name].to(CPU)
         if format == 'nf':
-            quantizers[name], scale, g_idx = quantizers[name]
-            layers[name], scale, g_idx = layers[name].to(CPU), scale.to(CPU), g_idx.to(CPU)
-            qlayers[name].pack(layers[name], scale, g_idx)
+            quantizers[name], scale, scale2, g_idx = quantizers[name]
+            layers[name], scale, scale2, g_idx = layers[name].to(CPU), scale.to(CPU), scale2.to(CPU), g_idx.to(CPU)
+            qlayers[name].pack(layers[name], scale, scale2, g_idx)
         elif format == 'fp':
             quantizers[name], scale, g_idx = quantizers[name]
             layers[name], scale, g_idx = layers[name].to(CPU), scale.to(CPU), g_idx.to(CPU)

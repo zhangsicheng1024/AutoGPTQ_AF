@@ -110,6 +110,7 @@ class BaseQuantizeConfig(PushToHubMixin):
             "model_name_or_path": self.model_name_or_path,
             "model_file_base_name": self.model_file_base_name,
             "gptq_quant": self.gptq_quant, # TODO
+            "two_scale": self.two_scale,
         }
 
 
@@ -397,7 +398,7 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                 for name in subset:
                     logger.info(f'Quantizing {name} in layer {i + 1}/{len(layers)}...')
                     if self.quantize_config.format == 'nf':
-                        scale, g_idx = gptq[name].fasterquant(
+                        scale, scale2, g_idx = gptq[name].fasterquant(
                             percdamp=self.quantize_config.damp_percent,
                             group_size=self.quantize_config.group_size,
                             actorder=self.quantize_config.desc_act
@@ -405,6 +406,7 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                         quantizers[f'{self.layers_block_name}.{i}.{name}'] = (
                             gptq[name].quantizer.to(CPU if force_layer_back_to_cpu else cur_layer_device),
                             move_to_device(scale, CPU if force_layer_back_to_cpu else cur_layer_device),
+                            move_to_device(scale2, CPU if force_layer_back_to_cpu else cur_layer_device),
                             move_to_device(g_idx, CPU if force_layer_back_to_cpu else cur_layer_device)
                         )
                     elif self.quantize_config.format == 'fp':
@@ -479,6 +481,7 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                 bits=self.quantize_config.bits,
                 format=self.quantize_config.format,
                 group_size=self.quantize_config.group_size,
+                two_scale=self.quantize_config.two_scale,
                 use_triton=use_triton,
                 use_cuda_fp16=use_cuda_fp16,
                 desc_act=self.quantize_config.desc_act,
@@ -882,6 +885,7 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                 quantize_config.bits,
                 quantize_config.format,
                 quantize_config.group_size,
+                two_scale=quantize_config.two_scale,
                 use_triton=use_triton,
                 use_cuda_fp16=use_cuda_fp16,
                 desc_act=quantize_config.desc_act,

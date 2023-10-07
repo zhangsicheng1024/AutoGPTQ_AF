@@ -8,8 +8,8 @@ logger = getLogger(__name__)
 
 
 def quantize(x, scale, zero):
-    code = torch.tensor([-1, -0.5350227355957031, -0.2469314038753510, 0, 
-        0.1833375245332718, 0.3819939494132996, 0.6229856610298157, 1], dtype=torch.float16)
+    code = torch.tensor([-4, -2, -1, -0, 0, 1, 2, 4], dtype=torch.float16)
+    code = code + 4
     dev = x.device
     shape = x.shape # [in_channel, group_size] in rtn, [in_channel, 1] in gptq
     code = code.to(dev)
@@ -26,10 +26,10 @@ def quantize(x, scale, zero):
 
     return xq
 
-class Quantizer(nn.Module):
+class Quantizer_fp4(nn.Module):
 
     def __init__(self, shape=1):
-        super(Quantizer, self).__init__()
+        super(Quantizer_fp4, self).__init__()
         self.register_buffer('maxq', torch.tensor(0))
         self.register_buffer('scale', torch.zeros(shape))
         self.register_buffer('zero', torch.zeros(shape))
@@ -38,10 +38,11 @@ class Quantizer(nn.Module):
         self,
         bits, perchannel=False, sym=True,
         mse=False, norm=2.4, grid=100, maxshrink=.8,
-        trits=False
+        trits=False, two_scale=False
     ):
 
-        self.maxq = torch.tensor(2 ** bits - 1)
+        # self.maxq = torch.tensor(2 ** bits - 1)
+        self.maxq = torch.tensor(8)
         self.perchannel = perchannel
         self.sym = sym
         self.mse = mse
@@ -83,34 +84,9 @@ class Quantizer(nn.Module):
         xmin[tmp] = -1
         xmax[tmp] = +1
 
-        if self.maxq < 0:
-            self.scale = xmax
-            self.zero = xmin
-        else:
-            self.scale = (xmax - xmin) / self.maxq
-            if self.sym:
-                self.zero = torch.full_like(self.scale, (self.maxq + 1) / 2)
-            else:
-                self.zero = torch.round(-xmin / self.scale)
+        self.scale = (xmax - xmin) / self.maxq
+        self.zero = torch.round(-xmin / self.scale)
 
-        if self.mse:
-            best = torch.full([x.shape[0]], float('inf'), device=dev)
-            for i in range(int(self.maxshrink * self.grid)):
-                p = 1 - i / self.grid
-                xmin1 = p * xmin
-                xmax1 = p * xmax
-                scale1 = (xmax1 - xmin1) / self.maxq
-                zero1 = torch.round(-xmin1 / scale1) if not self.sym else self.zero
-                q = quantize(x, scale1.unsqueeze(1), zero1.unsqueeze(1), self.maxq)
-                q -= x
-                q.abs_()
-                q.pow_(self.norm)
-                err = torch.sum(q, 1)
-                tmp = err < best
-                if torch.any(tmp):
-                    best[tmp] = err[tmp]
-                    self.scale[tmp] = scale1[tmp]
-                    self.zero[tmp] = zero1[tmp]
         if not self.perchannel:
             if weight:
                 tmp = shape[0]
@@ -122,6 +98,7 @@ class Quantizer(nn.Module):
         if weight:
             shape = [-1] + [1] * (len(shape) - 1)
             self.scale = self.scale.reshape(shape)
+            self.scale2 = torch.zeros_like(self.scale)
             self.zero = self.zero.reshape(shape)
             return
         if len(shape) == 4:
@@ -136,7 +113,7 @@ class Quantizer(nn.Module):
 
     def quantize(self, x):
         if self.ready():
-            return quantize(x, self.scale, self.zero, self.maxq)
+            return quantize(x, self.scale, self.zero)
         return x
 
     def enabled(self):
@@ -146,4 +123,4 @@ class Quantizer(nn.Module):
         return torch.all(self.scale != 0)
 
 
-__all__ = ["Quantizer"]
+__all__ = ["Quantizer_fp4"]

@@ -4,6 +4,11 @@
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 
+__device__ float code[16] = {-1.0, -0.6961928009986877, -0.5250730514526367, -0.39491748809814453, 
+                        -0.28444138169288635, -0.18477343022823334, -0.09105003625154495, 0.0, 
+                        0.07958029955625534, 0.16093020141124725, 0.24611230194568634, 0.33791524171829224, 
+                        0.44070982933044434, 0.5626170039176941, 0.7229568362236023, 1.0};
+
 // atomicAdd for double-precision floating-point numbers on hardware with
 // compute capability < 6.0 from:
 // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#atomic-functions
@@ -169,6 +174,20 @@ __global__ void VecQuant4MatMulKernel_old(
     int height,
     int width,
     int zero_width,
+    int groupsize
+);
+
+template <typename scalar_t>
+__global__ void VecQuant4MatMulKernel_old_nf(
+    const  scalar_t* __restrict__ vec,
+    const       int* __restrict__ mat,
+           scalar_t* __restrict__ mul,
+    const  scalar_t* __restrict__ scales,
+    const  scalar_t* __restrict__ scales2,
+    int batch,
+    int vec_height, 	
+    int height,
+    int width,
     int groupsize
 );
 
@@ -939,6 +958,37 @@ void vecquant4matmul_cuda_old(
   );
 }
 
+void vecquant4matmul_cuda_old_nf(
+  torch::Tensor vec,
+  torch::Tensor mat,
+  torch::Tensor mul,
+  torch::Tensor scales,
+  torch::Tensor scales2,
+  int groupsize
+) {
+  int batch = vec.size(0);
+  int vec_height = vec.size(1);
+  int height = mat.size(0);
+  int width = mat.size(1);
+
+  dim3 blocks(
+    (height + BLOCKHEIGHT4 - 1) / BLOCKHEIGHT4,
+    (width + BLOCKWIDTH - 1) / BLOCKWIDTH,
+    batch
+  );
+  dim3 threads(BLOCKWIDTH);
+
+  AT_DISPATCH_FLOATING_TYPES(
+    vec.type(), "vecquant4matmul_cuda_old_nf", ([&] {
+      VecQuant4MatMulKernel_old_nf<<<blocks, threads>>>(
+        vec.data<scalar_t>(), mat.data<int>(), mul.data<scalar_t>(),
+        scales.data<scalar_t>(), scales2.data<scalar_t>(),
+        batch, vec_height, height, width, groupsize
+      );
+    })
+  );
+}
+
 template <typename scalar_t>
 __global__ void VecQuant4MatMulKernel_old(
     const  scalar_t* __restrict__ vec,
@@ -986,6 +1036,61 @@ __global__ void VecQuant4MatMulKernel_old(
     res += (scale * scalar_t((tmp >> 20) & 0xF) - zero) * blockvec[k + 5];
     res += (scale * scalar_t((tmp >> 24) & 0xF) - zero) * blockvec[k + 6];
     res += (scale * scalar_t((tmp >> 28) & 0xF) - zero) * blockvec[k + 7];
+	
+    i += width;
+    k += 8;
+  }
+
+  atomicAdd(&mul[b * width + w], res);
+}
+
+template <typename scalar_t>
+__global__ void VecQuant4MatMulKernel_old_nf(
+    const  scalar_t* __restrict__ vec,
+    const       int* __restrict__ mat,
+           scalar_t* __restrict__ mul,
+    const  scalar_t* __restrict__ scales,
+    const  scalar_t* __restrict__ scales2,
+    int batch,
+    int vec_height,
+    int height,
+    int width,
+    int groupsize
+) {
+  int b = blockIdx.z;
+  int h = BLOCKHEIGHT4 * blockIdx.x;
+  int w = BLOCKWIDTH * blockIdx.y + threadIdx.x;
+
+  __shared__ scalar_t blockvec[BLOCKWIDTH];
+  blockvec[threadIdx.x] = vec[b * vec_height + blockIdx.x * BLOCKWIDTH + threadIdx.x];
+  __syncthreads();
+
+  scalar_t res = 0;
+  int i = width * h + w;
+  int g_h = h * 8;
+  int k = 0;
+
+  int z_w = w / 8; 
+  int z_mod = (w % 8) * 4;
+
+  unsigned int tmp;
+
+  while (k < BLOCKWIDTH) {
+    tmp = as_unsigned(mat[i]);
+	
+    int g = (g_h + k) / groupsize;
+    scalar_t scale = scales[g * width + w];
+    scalar_t scale2 = scales2[g * width + w];
+
+    scalar_t q;
+    q = code[(tmp >>  0) & 0xF]; res += (q > 0 ? scale : scale2) * q * blockvec[k + 0];
+    q = code[(tmp >>  4) & 0xF]; res += (q > 0 ? scale : scale2) * q * blockvec[k + 1];
+    q = code[(tmp >>  8) & 0xF]; res += (q > 0 ? scale : scale2) * q * blockvec[k + 2];
+    q = code[(tmp >> 12) & 0xF]; res += (q > 0 ? scale : scale2) * q * blockvec[k + 3];
+    q = code[(tmp >> 16) & 0xF]; res += (q > 0 ? scale : scale2) * q * blockvec[k + 4];
+    q = code[(tmp >> 20) & 0xF]; res += (q > 0 ? scale : scale2) * q * blockvec[k + 5];
+    q = code[(tmp >> 24) & 0xF]; res += (q > 0 ? scale : scale2) * q * blockvec[k + 6];
+    q = code[(tmp >> 28) & 0xF]; res += (q > 0 ? scale : scale2) * q * blockvec[k + 7];
 	
     i += width;
     k += 8;

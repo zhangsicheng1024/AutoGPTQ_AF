@@ -106,6 +106,7 @@ class GPTQ:
 
         g_idx = []
         scale = []
+        scale2 = []
         zero = []
         now_idx = 1
 
@@ -163,6 +164,7 @@ class GPTQ:
                 if self.format == 'nf':
                     # TODO: append scale for nf4 2scale
                     scale.append(self.quantizer.scale)
+                    scale2.append(self.quantizer.scale2)
                 elif self.format == 'fp':
                     scale.append(self.quantizer.scale)
                 elif self.format == 'af':
@@ -191,8 +193,11 @@ class GPTQ:
         if self.format == 'nf':
             if scale == []:
                 scale.append(self.quantizer.scale)
+            if scale2 == []:
+                scale2.append(self.quantizer.scale2)
             scale = torch.cat(scale, dim=1)
-            return scale, g_idx
+            scale2 = torch.cat(scale2, dim=1)
+            return scale, scale2, g_idx
         elif self.format == 'fp':
             if scale == []:
                 scale.append(self.quantizer.scale)
