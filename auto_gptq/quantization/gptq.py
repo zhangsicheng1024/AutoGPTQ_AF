@@ -101,57 +101,13 @@ class GPTQ:
         if not self.quantizer.ready():
             self.quantizer.find_params(W, weight=True)
 
-        Losses = torch.zeros_like(W)
+        # Losses = torch.zeros_like(W)
         Q = torch.zeros_like(W)
 
         g_idx = []
         scale = []
         scale2 = []
         zero = []
-        now_idx = 1
-
-        # old rtn
-        '''
-        for i1 in range(0, self.columns, blocksize):
-            i2 = min(i1 + blocksize, self.columns)
-            count = i2 - i1
-
-            W1 = W[:, i1:i2].clone()
-            Q1 = torch.zeros_like(W1)
-            Losses1 = torch.zeros_like(W1)
-
-            for i in range(count):
-                w = W1[:, i]
-
-                if group_size != -1:
-                    if (i1 + i) % group_size == 0:
-                        self.quantizer.find_params(W[:, (i1 + i):(i1 + i + group_size)], weight=True)
-
-                    if ((i1 + i) // group_size) - now_idx == -1:
-                        if self.format == 'nf':
-                            scale.append(self.quantizer.scale)
-                        elif self.format == 'fp':
-                            scale.append(self.quantizer.scale)
-                            # zero.append(self.quantizer.zero)
-                        else: # int
-                            scale.append(self.quantizer.scale)
-                            zero.append(self.quantizer.zero)
-                        now_idx += 1
-
-                q = self.quantizer.quantize(w.unsqueeze(1)).flatten()
-                Q1[:, i] = q
-                Losses1[:, i] = (w - q) ** 2 
-
-            Q[:, i1:i2] = Q1
-            Losses[:, i1:i2] = Losses1 / 2
-
-            if os.environ.get("DEBUG"):
-                self.layer.weight.data[:, :i2] = Q[:, :i2]
-                self.layer.weight.data[:, i2:] = W[:, i2:]
-                logger.debug(torch.sum((self.layer(self.inp1) - self.out1) ** 2))
-                logger.debug(torch.sum(Losses))
-        '''
-        # old rtn
 
         # new rtn
         if group_size == -1:
@@ -162,11 +118,11 @@ class GPTQ:
             for i, split_tensor in enumerate(split_tensors):
                 self.quantizer.find_params(split_tensor, weight=True)
                 if self.format == 'nf':
-                    # TODO: append scale for nf4 2scale
                     scale.append(self.quantizer.scale)
                     scale2.append(self.quantizer.scale2)
                 elif self.format == 'fp':
                     scale.append(self.quantizer.scale)
+                    scale2.append(self.quantizer.scale2)
                 elif self.format == 'af':
                     # TODO 2 scale, etc.
                     scale.append(self.quantizer.scale)
@@ -201,8 +157,11 @@ class GPTQ:
         elif self.format == 'fp':
             if scale == []:
                 scale.append(self.quantizer.scale)
+            if scale2 == []:
+                scale2.append(self.quantizer.scale2)
             scale = torch.cat(scale, dim=1)
-            return scale, g_idx
+            scale2 = torch.cat(scale2, dim=1)
+            return scale, scale2, g_idx
         elif self.format == 'af':
             # TODO af 2 scale
             if scale == []:
@@ -257,6 +216,7 @@ class GPTQ:
 
         g_idx = []
         scale = []
+        scale2 = []
         zero = []
         now_idx = 1
 
@@ -281,8 +241,10 @@ class GPTQ:
                     if ((i1 + i) // group_size) - now_idx == -1:
                         if self.format == 'nf':
                             scale.append(self.quantizer.scale)
+                            scale2.append(self.quantizer.scale2)
                         elif self.format == 'fp':
                             scale.append(self.quantizer.scale)
+                            scale2.append(self.quantizer.scale2)
                         elif self.format == 'af':
                             scale.append(self.quantizer.scale)
                         else: # int
@@ -330,13 +292,19 @@ class GPTQ:
         if self.format == 'nf':
             if scale == []:
                 scale.append(self.quantizer.scale)
+            if scale2 == []:
+                scale2.append(self.quantizer.scale2)
             scale = torch.cat(scale, dim=1)
-            return scale, g_idx
+            scale2 = torch.cat(scale2, dim=1)
+            return scale, scale2, g_idx
         elif self.format == 'fp':
             if scale == []:
                 scale.append(self.quantizer.scale)
+            if scale2 == []:
+                scale2.append(self.quantizer.scale2)
             scale = torch.cat(scale, dim=1)
-            return scale, g_idx
+            scale2 = torch.cat(scale2, dim=1)
+            return scale, scale2, g_idx
         elif self.format == 'af':
             if scale == []:
                 scale.append(self.quantizer.scale)

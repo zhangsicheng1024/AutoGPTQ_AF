@@ -19,7 +19,7 @@ except ImportError:
     autogptq_cuda_64 = None
     _autogptq_cuda_available = False
 
-def fptoint4(w, scale, code):
+def fptoint(w, scale, code):
     # w: [in_channel]
     # scale: [in_channel]
 
@@ -31,7 +31,7 @@ def fptoint4(w, scale, code):
     
     return q
 
-def int4tofp(q, scale, code):
+def inttofp(q, scale, code):
     # q: [group_size, in_channel, out_channel]
     # scale: [group_size, in_channel / group_size, out_channel]
 
@@ -46,7 +46,7 @@ def int4tofp(q, scale, code):
 
     return w
 
-def fptoint4_2scale(w, scale, scale2, code):
+def fptoint_2scale(w, scale, scale2, code):
     # w: [in_channel]
     # scale: [in_channel]
 
@@ -65,7 +65,7 @@ def fptoint4_2scale(w, scale, scale2, code):
     
     return q
 
-def int4tofp_2scale(q, scale, scale2, code):
+def inttofp_2scale(q, scale, scale2, code):
     # q: [group_size, in_channel, out_channel]
     # scale: [group_size, in_channel / group_size, out_channel]
 
@@ -95,7 +95,7 @@ class QuantLinear(nn.Module):
         bias,
         two_scale=False,
         use_cuda_fp16=True,
-        kernel_switch_threshold=False,
+        kernel_switch_threshold=128,
         trainable=False
     ):
         super().__init__()
@@ -185,12 +185,11 @@ class QuantLinear(nn.Module):
         intweight = []
         code = self.code.to(W.device)
         for idx in range(self.infeatures):
-            # logger.info(f'idx {idx}')
             g_idx = idx // self.group_size
             if self.two_scale:
-                q = fptoint4_2scale(W[:, idx], self.scales[g_idx], self.scales2[g_idx], code)[:, None]
+                q = fptoint_2scale(W[:, idx], self.scales[g_idx], self.scales2[g_idx], code)[:, None]
             else:
-                q = fptoint4(W[:, idx], self.scales[g_idx], code)[:, None]
+                q = fptoint(W[:, idx], self.scales[g_idx], code)[:, None]
             intweight.append(q)
         intweight = torch.cat(intweight, dim=1)
         intweight = intweight.t().contiguous()
@@ -208,25 +207,24 @@ class QuantLinear(nn.Module):
                 i += 32 // self.bits
                 row += 1
             elif self.bits == 3:
-                raise NotImplementedError("3 bits unimplemented")
-                # for j in range(i, i + 10):
-                #     qweight[row] |= intweight[j] << (3 * (j - i))
-                # i += 10
-                # qweight[row] |= intweight[i] << 30
-                # row += 1
-                # qweight[row] |= (intweight[i] >> 2) & 1
-                # i += 1
-                # for j in range(i, i + 10):
-                #     qweight[row] |= intweight[j] << (3 * (j - i) + 1)
-                # i += 10
-                # qweight[row] |= intweight[i] << 31
-                # row += 1
-                # qweight[row] |= (intweight[i] >> 1) & 0x3
-                # i += 1
-                # for j in range(i, i + 10):
-                #     qweight[row] |= intweight[j] << (3 * (j - i) + 2)
-                # i += 10
-                # row += 1
+                for j in range(i, i + 10):
+                    qweight[row] |= intweight[j] << (3 * (j - i))
+                i += 10
+                qweight[row] |= intweight[i] << 30
+                row += 1
+                qweight[row] |= (intweight[i] >> 2) & 1
+                i += 1
+                for j in range(i, i + 10):
+                    qweight[row] |= intweight[j] << (3 * (j - i) + 1)
+                i += 10
+                qweight[row] |= intweight[i] << 31
+                row += 1
+                qweight[row] |= (intweight[i] >> 1) & 0x3
+                i += 1
+                for j in range(i, i + 10):
+                    qweight[row] |= intweight[j] << (3 * (j - i) + 2)
+                i += 10
+                row += 1
             else:
                 raise NotImplementedError("Only 2,3,4,8 bits are supported.")
 
@@ -239,43 +237,19 @@ class QuantLinear(nn.Module):
         if self.autogptq_cuda_available is True and (
             self.kernel_switch_threshold is False or x.shape[0] < self.kernel_switch_threshold
         ):
-            out = torch.zeros(x.shape[0], out_shape[-1], dtype=torch.float, device=x.device)
-            x = x.float()
-            if self.bits == 2:
-                self.autogptq_cuda.vecquant2matmul_old_nf(x, self.qweight, out, self.scales.float(), self.qzeros, self.group_size)
-            elif self.bits == 3:
-                self.autogptq_cuda.vecquant3matmul_old_nf(x, self.qweight, out, self.scales.float(), self.qzeros, self.group_size)
-            elif self.bits == 4:
-                self.autogptq_cuda.vecquant4matmul_old_nf(x, self.qweight, out, self.scales.float(), self.scales2.float(), self.group_size)
-            elif self.bits == 8:
-                self.autogptq_cuda.vecquant8matmul_old_nf(x, self.qweight, out, self.scales.float(), self.qzeros, self.group_size)
-            else:
-                raise NotImplementedError("Only 2,3,4,8 bits are supported.")
-
+            raise NotImplementedError('cuda kernel unimplemented')
             # out = torch.zeros(x.shape[0], out_shape[-1], dtype=torch.float, device=x.device)
-            # if self.use_cuda_fp16:
-            #     x = x.half()
-            #     if self.bits == 2:
-            #         self.autogptq_cuda.vecquant2matmul_faster_old(x, self.qweight, out, self.scales.float(), self.qzeros, self.group_size, self.half_indim)
-            #     elif self.bits == 3:
-            #         self.autogptq_cuda.vecquant3matmul_faster_old(x, self.qweight, out, self.scales.float(), self.qzeros, self.group_size, self.half_indim)
-            #     elif self.bits == 4:
-            #         self.autogptq_cuda.vecquant4matmul_faster_old(x, self.qweight, out, self.scales.float(), self.qzeros, self.group_size, self.half_indim)
-
-            #     else:
-            #         raise NotImplementedError("Only 2,3,4 bits are supported.")
+            # x = x.float()
+            # if self.bits == 2:
+            #     self.autogptq_cuda.vecquant2matmul_old_nf(x, self.qweight, out, self.scales.float(), self.qzeros, self.group_size)
+            # elif self.bits == 3:
+            #     self.autogptq_cuda.vecquant3matmul_old_nf(x, self.qweight, out, self.scales.float(), self.qzeros, self.group_size)
+            # elif self.bits == 4:
+            #     self.autogptq_cuda.vecquant4matmul_old_nf(x, self.qweight, out, self.scales.float(), self.scales2.float(), self.group_size)
+            # elif self.bits == 8:
+            #     self.autogptq_cuda.vecquant8matmul_old_nf(x, self.qweight, out, self.scales.float(), self.qzeros, self.group_size)
             # else:
-            #     x = x.float()
-            #     if self.bits == 2:
-            #         self.autogptq_cuda.vecquant2matmul_old(x, self.qweight, out, self.scales.float(), self.qzeros, self.group_size)
-            #     elif self.bits == 3:
-            #         self.autogptq_cuda.vecquant3matmul_old(x, self.qweight, out, self.scales.float(), self.qzeros, self.group_size)
-            #     elif self.bits == 4:
-            #         self.autogptq_cuda.vecquant4matmul_old(x, self.qweight, out, self.scales.float(), self.qzeros, self.group_size)
-            #     elif self.bits == 8:
-            #         self.autogptq_cuda.vecquant8matmul_old(x, self.qweight, out, self.scales.float(), self.qzeros, self.group_size)
-            #     else:
-            #         raise NotImplementedError("Only 2,3,4,8 bits are supported.")
+            #     raise NotImplementedError("Only 2,3,4,8 bits are supported.")
         else:
             if self.wf.device != self.scales.device:
                self.wf = self.wf.to(self.scales.device)
@@ -291,33 +265,26 @@ class QuantLinear(nn.Module):
                torch.bitwise_and(weight,(2 ** self.bits) - 1, out=weight)
                weight = weight.reshape(-1, self.group_size, weight.shape[2])
             elif self.bits == 3:
-                raise NotImplementedError("3 bits unimplemented")
-                # zeros = self.qzeros.reshape(self.qzeros.shape[0], self.qzeros.shape[1]//3, 3, 1).expand(-1, -1, -1, 12)
-                # zeros = (zeros >> self.wf.unsqueeze(0))
-                # zeros[:,:,0,10] = (zeros[:,:,0,10]&0x3) | ((zeros[:,:,1,0] << 2)&0x4)
-                # zeros[:,:,1,11] = (zeros[:,:,1,11]&0x1) | ((zeros[:,:,2,0] << 1)&0x6)
-                # zeros = zeros & 0x7
-                # zeros = torch.cat([zeros[:,:,0,:11], zeros[:,:,1,1:12], zeros[:,:,2,1:11]], dim=2)
+                # raise NotImplementedError("3 bits unimplemented")
                 
-                # zeros = zeros + 1
-                # zeros = zeros.reshape(-1, 1, zeros.shape[1] * zeros.shape[2]) 
+                scales = self.scales
+                scales = scales.reshape(-1, 1, scales.shape[-1])
+                scales2 = self.scales2
+                scales2 = scales2.reshape(-1, 1, scales2.shape[-1])
                 
-                # scales = self.scales
-                # scales = scales.reshape(-1, 1, scales.shape[-1])
-                
-                # weight = self.qweight.reshape(self.qweight.shape[0]//3, 3, 1, self.qweight.shape[1]).expand(-1, -1, 12, -1)
-                # weight = (weight >> self.wf.unsqueeze(-1))&0x7
-                # weight[:,0,10] = (weight[:,0,10]&0x3) | ((weight[:,1,0] << 2)&0x4)
-                # weight[:,1,11] = (weight[:,1,11]&0x1) | ((weight[:,2,0] << 1)&0x6)
-                # weight = weight & 0x7
-                # weight = torch.cat([weight[:,0,:11], weight[:,1,1:12], weight[:,2,1:11]], dim=1)
-                # weight = weight.reshape(-1, self.group_size, weight.shape[2])
+                weight = self.qweight.reshape(self.qweight.shape[0]//3, 3, 1, self.qweight.shape[1]).expand(-1, -1, 12, -1)
+                weight = (weight >> self.wf.unsqueeze(-1))&0x7
+                weight[:,0,10] = (weight[:,0,10]&0x3) | ((weight[:,1,0] << 2)&0x4)
+                weight[:,1,11] = (weight[:,1,11]&0x1) | ((weight[:,2,0] << 1)&0x6)
+                weight = weight & 0x7
+                weight = torch.cat([weight[:,0,:11], weight[:,1,1:12], weight[:,2,1:11]], dim=1)
+                weight = weight.reshape(-1, self.group_size, weight.shape[2])
             else:
                 raise NotImplementedError("Only 2,3,4,8 bits are supported.")
             if self.two_scale:
-                weight = int4tofp_2scale(weight, scales, scales2, self.code)
+                weight = inttofp_2scale(weight, scales, scales2, self.code)
             else:
-                weight = int4tofp(weight, scales, self.code)
+                weight = inttofp(weight, scales, self.code)
             weight = weight.reshape(weight.shape[0] * weight.shape[1], weight.shape[2])
 
             out = torch.matmul(x.half(), weight)

@@ -26,6 +26,7 @@ class QuantLinear(nn.Module):
         infeatures,
         outfeatures,
         bias,
+        two_scale=False,
         use_cuda_fp16=True,
         kernel_switch_threshold=128,
         trainable=False

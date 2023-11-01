@@ -6,12 +6,18 @@ import torch.nn as nn
 
 logger = getLogger(__name__)
 
-def quantize(x, scale, code):
+
+def quantize(x, scale, zero):
+    code = torch.tensor([-1, -0.6961928009986877, -0.5250730514526367, -0.39491748809814453, 
+                        -0.28444138169288635, -0.18477343022823334, -0.09105003625154495, 0, 
+                        0.07958029955625534, 0.16093020141124725, 0.24611230194568634, 0.33791524171829224, 
+                        0.44070982933044434, 0.5626170039176941, 0.7229568362236023, 1], dtype=torch.float16)
+    code = code + 1
     dev = x.device
     shape = x.shape # [in_channel, group_size] in rtn, [in_channel, 1] in gptq
     code = code.to(dev)
 
-    q = x / scale
+    q = x / scale + zero
 
     q = q.reshape(-1,1) # [in_channel * group_size, 1]
     distance = torch.abs(q - code) # [in_channel * group_size, code_size]
@@ -19,37 +25,9 @@ def quantize(x, scale, code):
     q = torch.gather(code, -1, idx) # [in_channel * group_size]
     q = q.reshape(shape) # [in_channel, group_size]
 
-    xq = q * scale
+    xq = (q - zero) * scale
 
     return xq
-
-def quantize_2scale(x, scale_pos, scale_neg, code):
-    dev = x.device
-    shape = x.shape # [in_channel, group_size] in rtn, [in_channel, 1] in gptq
-    code = code.to(dev)
-
-    x_pos = torch.zeros_like(x)
-    x_neg = torch.zeros_like(x)
-    x_pos = torch.where(x >= 0, x, x_pos)
-    x_neg = torch.where(x < 0, x, x_neg)
-    q_pos = x_pos / scale_pos
-    q_neg = x_neg / scale_neg
-
-    q_pos = q_pos.reshape(-1,1) # [in_channel * group_size, 1]
-    distance = torch.abs(q_pos - code) # [in_channel * group_size, code_size]
-    idx = torch.argmin(distance, dim=-1) # [in_channel * group_size]
-    q_pos = torch.gather(code, -1, idx) # [in_channel * group_size]
-    q_pos = q_pos.reshape(shape) # [in_channel, group_size]
-
-    q_neg = q_neg.reshape(-1,1)
-    distance = torch.abs(q_neg - code)
-    idx = torch.argmin(distance, dim=-1)
-    q_neg = torch.gather(code, -1, idx)
-    q_neg = q_neg.reshape(shape)
-
-    xq = q_pos * scale_pos + q_neg * scale_neg
-    return xq
-
 
 class Quantizer_nf4(nn.Module):
 
@@ -57,37 +35,30 @@ class Quantizer_nf4(nn.Module):
         super(Quantizer_nf4, self).__init__()
         self.register_buffer('maxq', torch.tensor(0))
         self.register_buffer('scale', torch.zeros(shape))
-        self.register_buffer('scale2', torch.zeros(shape))
+        self.register_buffer('zero', torch.zeros(shape))
 
     def configure(
         self,
         bits, perchannel=False, sym=True,
         mse=False, norm=2.4, grid=100, maxshrink=.8,
-        trits=False,
-        two_scale=False
+        trits=False, two_scale=False
     ):
-        self.bits = bits
+
+        # self.maxq = torch.tensor(2 ** bits - 1)
+        self.maxq = torch.tensor(2)
         self.perchannel = perchannel
         self.sym = sym
         self.mse = mse
         self.norm = norm
         self.grid = grid
         self.maxshrink = maxshrink
-        self.two_scale = two_scale
         if trits:
             self.maxq = torch.tensor(-1)
 
-        if self.bits == 4:
-            self.code = torch.tensor([-1, -0.6961928009986877, -0.5250730514526367, -0.39491748809814453, 
-                                      -0.28444138169288635, -0.18477343022823334, -0.09105003625154495, 0, 
-                                      0.07958029955625534, 0.16093020141124725, 0.24611230194568634, 0.33791524171829224, 
-                                      0.44070982933044434, 0.5626170039176941, 0.7229568362236023, 1], dtype=torch.float16)
-        elif self.bits == 3:
-            self.code = torch.tensor([-1, -0.5350227355957031, -0.2469314038753510, 0, 
-                                      0.1833375245332718, 0.3819939494132996, 0.6229856610298157, 1], dtype=torch.float16)
-
     def find_params(self, x, weight=False):
         dev = x.device
+        self.maxq = self.maxq.to(dev)
+
         shape = x.shape
         if self.perchannel:
             if weight:
@@ -116,12 +87,8 @@ class Quantizer_nf4(nn.Module):
         xmin[tmp] = -1
         xmax[tmp] = +1
 
-        if not self.two_scale:
-            self.scale = torch.maximum(torch.abs(xmax), torch.abs(xmin))
-            self.scale2 = torch.zeros_like(self.scale)
-        else:
-            self.scale = torch.abs(xmax)
-            self.scale2 = torch.abs(xmin)
+        self.scale = (xmax - xmin) / self.maxq
+        self.zero = torch.round(-xmin / self.scale)
 
         if not self.perchannel:
             if weight:
@@ -129,27 +96,27 @@ class Quantizer_nf4(nn.Module):
             else:
                 tmp = shape[1] if len(shape) != 3 else shape[2]
             self.scale = self.scale.repeat(tmp)
+            self.zero = self.zero.repeat(tmp)
 
         if weight:
             shape = [-1] + [1] * (len(shape) - 1)
             self.scale = self.scale.reshape(shape)
-            self.scale2 = self.scale2.reshape(shape)
+            self.scale2 = torch.zeros_like(self.scale)
+            self.zero = self.zero.reshape(shape)
             return
         if len(shape) == 4:
             self.scale = self.scale.reshape((1, -1, 1, 1))
+            self.zero = self.zero.reshape((1, -1, 1, 1))
         if len(shape) == 3:
             self.scale = self.scale.reshape((1, 1, -1))
+            self.zero = self.zero.reshape((1, 1, -1))
         if len(shape) == 2:
             self.scale = self.scale.unsqueeze(0)
-            self.scale2 = self.scale2.unsqueeze(0)
-
+            self.zero = self.zero.unsqueeze(0)
 
     def quantize(self, x):
         if self.ready():
-            if self.two_scale:
-                return quantize_2scale(x, self.scale, self.scale2, self.code)
-            else:
-                return quantize(x, self.scale, self.code)
+            return quantize(x, self.scale, self.zero)
         return x
 
     def enabled(self):
@@ -157,5 +124,6 @@ class Quantizer_nf4(nn.Module):
 
     def ready(self):
         return torch.all(self.scale != 0)
+
 
 __all__ = ["Quantizer_nf4"]

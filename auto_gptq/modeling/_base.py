@@ -348,6 +348,7 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                             perchannel=True,
                             sym=self.quantize_config.sym,
                             mse=False,
+                            two_scale=self.quantize_config.two_scale,
                         )
                     elif self.quantize_config.format == 'af':
                         gptq[name].quantizer.configure(
@@ -410,7 +411,7 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                             move_to_device(g_idx, CPU if force_layer_back_to_cpu else cur_layer_device)
                         )
                     elif self.quantize_config.format == 'fp':
-                        scale, g_idx = gptq[name].fasterquant(
+                        scale, scale2, g_idx = gptq[name].fasterquant(
                             percdamp=self.quantize_config.damp_percent,
                             group_size=self.quantize_config.group_size,
                             actorder=self.quantize_config.desc_act
@@ -418,6 +419,7 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                         quantizers[f'{self.layers_block_name}.{i}.{name}'] = (
                             gptq[name].quantizer.to(CPU if force_layer_back_to_cpu else cur_layer_device),
                             move_to_device(scale, CPU if force_layer_back_to_cpu else cur_layer_device),
+                            move_to_device(scale2, CPU if force_layer_back_to_cpu else cur_layer_device),
                             move_to_device(g_idx, CPU if force_layer_back_to_cpu else cur_layer_device)
                         )
                     elif self.quantize_config.format == 'af':

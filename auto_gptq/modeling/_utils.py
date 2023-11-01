@@ -139,9 +139,9 @@ def pack_model(
             layers[name], scale, scale2, g_idx = layers[name].to(CPU), scale.to(CPU), scale2.to(CPU), g_idx.to(CPU)
             qlayers[name].pack(layers[name], scale, scale2, g_idx)
         elif format == 'fp':
-            quantizers[name], scale, g_idx = quantizers[name]
-            layers[name], scale, g_idx = layers[name].to(CPU), scale.to(CPU), g_idx.to(CPU)
-            qlayers[name].pack(layers[name], scale, g_idx)
+            quantizers[name], scale, scale2, g_idx = quantizers[name]
+            layers[name], scale, scale2, g_idx = layers[name].to(CPU), scale.to(CPU), scale2.to(CPU), g_idx.to(CPU)
+            qlayers[name].pack(layers[name], scale, scale2, g_idx)
         else: # int
             quantizers[name], scale, zero, g_idx = quantizers[name]
             layers[name], scale, zero, g_idx = layers[name].to(CPU), scale.to(CPU), zero.to(CPU), g_idx.to(CPU)

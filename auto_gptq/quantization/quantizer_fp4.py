@@ -2,7 +2,6 @@ from logging import getLogger
 
 import torch
 import torch.nn as nn
-from .ffi import *
 
 
 logger = getLogger(__name__)
@@ -11,6 +10,7 @@ def quantize(x, scale, code):
     dev = x.device
     shape = x.shape # [in_channel, group_size] in rtn, [in_channel, 1] in gptq
     code = code.to(dev)
+
     q = x / scale
 
     q = q.reshape(-1,1) # [in_channel * group_size, 1]
@@ -20,7 +20,36 @@ def quantize(x, scale, code):
     q = q.reshape(shape) # [in_channel, group_size]
 
     xq = q * scale
+
     return xq
+
+def quantize_2scale(x, scale_pos, scale_neg, code):
+    dev = x.device
+    shape = x.shape # [in_channel, group_size] in rtn, [in_channel, 1] in gptq
+    code = code.to(dev)
+
+    x_pos = torch.zeros_like(x)
+    x_neg = torch.zeros_like(x)
+    x_pos = torch.where(x >= 0, x, x_pos)
+    x_neg = torch.where(x < 0, x, x_neg)
+    q_pos = x_pos / scale_pos
+    q_neg = x_neg / scale_neg
+
+    q_pos = q_pos.reshape(-1,1) # [in_channel * group_size, 1]
+    distance = torch.abs(q_pos - code) # [in_channel * group_size, code_size]
+    idx = torch.argmin(distance, dim=-1) # [in_channel * group_size]
+    q_pos = torch.gather(code, -1, idx) # [in_channel * group_size]
+    q_pos = q_pos.reshape(shape) # [in_channel, group_size]
+
+    q_neg = q_neg.reshape(-1,1)
+    distance = torch.abs(q_neg - code)
+    idx = torch.argmin(distance, dim=-1)
+    q_neg = torch.gather(code, -1, idx)
+    q_neg = q_neg.reshape(shape)
+
+    xq = q_pos * scale_pos + q_neg * scale_neg
+    return xq
+
 
 class Quantizer_fp4(nn.Module):
 
@@ -28,29 +57,23 @@ class Quantizer_fp4(nn.Module):
         super(Quantizer_fp4, self).__init__()
         self.register_buffer('maxq', torch.tensor(0))
         self.register_buffer('scale', torch.zeros(shape))
-        self.register_buffer('zero', torch.zeros(shape))
+        self.register_buffer('scale2', torch.zeros(shape))
 
     def configure(
         self,
         bits, perchannel=False, sym=True,
         mse=False, norm=2.4, grid=100, maxshrink=.8,
-        trits=False, exponet_bits=2, mantissa_bits=1
+        trits=False,
+        two_scale=False
     ):
         self.bits = bits
-        if bits == 4: exponet_bits=2; mantissa_bits=1
-        elif bits == 3: exponet_bits=2; mantissa_bits=0
-        self.maxq = torch.tensor(2*2**(2**exponet_bits/2) * (2-(0.5)**(mantissa_bits))) # fp4:12
-        self.quant_min = - 2**(2**exponet_bits/2) * (2-(0.5)**(mantissa_bits)) # fp4:-6
-        self.quant_max = 2**(2**exponet_bits/2) * (2-(0.5)**(mantissa_bits)) # fp4:6
-        self.exponet_bits = exponet_bits
-        self.mantissa_bits = mantissa_bits
-
         self.perchannel = perchannel
         self.sym = sym
         self.mse = mse
         self.norm = norm
         self.grid = grid
         self.maxshrink = maxshrink
+        self.two_scale = two_scale
         if trits:
             self.maxq = torch.tensor(-1)
 
@@ -63,8 +86,6 @@ class Quantizer_fp4(nn.Module):
 
     def find_params(self, x, weight=False):
         dev = x.device
-        self.maxq = self.maxq.to(dev)
-
         shape = x.shape
         if self.perchannel:
             if weight:
@@ -93,92 +114,40 @@ class Quantizer_fp4(nn.Module):
         xmin[tmp] = -1
         xmax[tmp] = +1
 
-        # =========zyj============
-        self.scale = 2 * torch.maximum(torch.abs(xmax), torch.abs(xmin)) / self.maxq
-        self.zero = torch.zeros_like(self.scale)
-        # ========================
+        if not self.two_scale:
+            self.scale = torch.maximum(torch.abs(xmax), torch.abs(xmin)) / (self.maxq / 2)
+            self.scale2 = torch.zeros_like(self.scale)
+        else:
+            self.scale = torch.abs(xmax) / (self.maxq / 2)
+            self.scale2 = torch.abs(xmin) / (self.maxq / 2)
 
-        if self.mse:
-            raise NotImplementedError("fp4 mse not implemented")
-            best = torch.full([x.shape[0]], float('inf'), device=dev)
-            for i in range(int(self.maxshrink * self.grid)):
-                p = 1 - i / self.grid
-                xmin1 = p * xmin
-                xmax1 = p * xmax
-                scale1 = (xmax1 - xmin1) / self.maxq
-                zero1 = torch.round(-xmin1 / scale1) if not self.sym else self.zero
-                q = quantize(x, scale1.unsqueeze(1), zero1.unsqueeze(1), self.maxq)
-                q -= x
-                q.abs_()
-                q.pow_(self.norm)
-                err = torch.sum(q, 1)
-                tmp = err < best
-                if torch.any(tmp):
-                    best[tmp] = err[tmp]
-                    self.scale[tmp] = scale1[tmp]
-                    self.zero[tmp] = zero1[tmp]
         if not self.perchannel:
             if weight:
                 tmp = shape[0]
             else:
                 tmp = shape[1] if len(shape) != 3 else shape[2]
             self.scale = self.scale.repeat(tmp)
-            self.zero = self.zero.repeat(tmp)
 
         if weight:
             shape = [-1] + [1] * (len(shape) - 1)
             self.scale = self.scale.reshape(shape)
-            self.zero = self.zero.reshape(shape)
+            self.scale2 = self.scale2.reshape(shape)
             return
         if len(shape) == 4:
             self.scale = self.scale.reshape((1, -1, 1, 1))
-            self.zero = self.zero.reshape((1, -1, 1, 1))
         if len(shape) == 3:
             self.scale = self.scale.reshape((1, 1, -1))
-            self.zero = self.zero.reshape((1, 1, -1))
         if len(shape) == 2:
             self.scale = self.scale.unsqueeze(0)
-            self.zero = self.zero.unsqueeze(0)
+            self.scale2 = self.scale2.unsqueeze(0)
+
 
     def quantize(self, x):
         if self.ready():
-            return quantize(x, self.scale, self.code)
-            # x:        [in_feature, group_size] in rtn, [in_feature, 1] in gptq
-            # scale:    [in_feature, 1]
-
-            # x = CUDA.FloatingQuantize_T(
-            #     tensor=x,
-            #     scales=self.scale.repeat(1, x.shape[1]),
-            #     offsets=self.zero.repeat(1, x.shape[1]),
-            #     exponent=self.exponet_bits,
-            #     mantissa=self.mantissa_bits,
-            #     minimum=self.quant_min,
-            #     maximum=self.quant_max,
-            #     rounding=0
-            # )
-
-            # is equal to quant + dequant:
-
-            # q = CUDA.FloatingQuantize_T_Quant(
-            #     tensor=x,
-            #     scales=self.scale.repeat(1, x.shape[1]),
-            #     offsets=self.zero.repeat(1, x.shape[1]),
-            #     exponent=self.exponet_bits,
-            #     mantissa=self.mantissa_bits,
-            #     minimum=self.quant_min,
-            #     maximum=self.quant_max,
-            #     rounding=0
-            # )
-            # x = CUDA.FloatingQuantize_T_Dequant(
-            #     tensor=q,
-            #     scales=self.scale.repeat(1, q.shape[1]),
-            #     offsets=self.zero.repeat(1, q.shape[1]),
-            #     exponent=self.exponet_bits,
-            #     mantissa=self.mantissa_bits,
-            #     minimum=self.quant_min,
-            #     maximum=self.quant_max,
-            #     rounding=0
-            # )
+            if self.two_scale:
+                return quantize_2scale(x, self.scale, self.scale2, self.code)
+            else:
+                return quantize(x, self.scale, self.code)
         return x
 
     def enabled(self):
@@ -186,6 +155,5 @@ class Quantizer_fp4(nn.Module):
 
     def ready(self):
         return torch.all(self.scale != 0)
-
 
 __all__ = ["Quantizer_fp4"]
