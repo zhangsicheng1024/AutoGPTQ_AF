@@ -96,7 +96,8 @@ class QuantLinear(nn.Module):
         two_scale=False,
         use_cuda_fp16=True,
         kernel_switch_threshold=128,
-        trainable=False
+        trainable=False,
+        weight_dtype=torch.float16,
     ):
         super().__init__()
         global _autogptq_cuda_available

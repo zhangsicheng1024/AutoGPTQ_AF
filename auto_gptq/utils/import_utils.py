@@ -1,4 +1,8 @@
 from packaging.version import parse as parse_version
+from logging import getLogger
+import torch
+
+from typing import Optional
 
 try:
     import triton
@@ -8,25 +12,69 @@ except ImportError:
     TRITON_AVAILABLE = False
 
 try:
-    import autogptq_cuda
+    import autogptq_cuda_256
+    import autogptq_cuda_64
 
     AUTOGPTQ_CUDA_AVAILABLE = True
 except:
     AUTOGPTQ_CUDA_AVAILABLE = False
 
 
-def dynamically_import_QuantLinear(use_triton: bool, desc_act: bool, group_size: int, format: str):
+try:
+    import exllama_kernels
+
+    EXLLAMA_KERNELS_AVAILABLE = True
+except:
+    EXLLAMA_KERNELS_AVAILABLE = False
+    
+try:
+    import exllamav2_kernels
+
+    EXLLAMAV2_KERNELS_AVAILABLE = True
+except:
+    EXLLAMAV2_KERNELS_AVAILABLE = False
+    
+try:
+    import cQIGen as qinfer
+
+    QIGEN_AVAILABLE = True
+except:
+    QIGEN_AVAILABLE = False
+
+logger = getLogger(__name__)
+
+
+def dynamically_import_QuantLinear(use_triton: bool, desc_act: bool, group_size: int, bits: int, format: str, disable_exllama: Optional[bool] = None, disable_exllamav2:bool = False, use_qigen: bool = False):
     if format == 'nf':
         from ..nn_modules.qlinear.qlinear_cuda_nf import QuantLinear
+        return QuantLinear
     elif format == 'fp':
         from ..nn_modules.qlinear.qlinear_cuda_fp import QuantLinear
-    elif use_triton:
-        from ..nn_modules.qlinear.qlinear_triton import QuantLinear
+        return QuantLinear
+    if use_qigen:
+        from ..nn_modules.qlinear.qlinear_qigen import QuantLinear
     else:
-        if not desc_act or group_size == -1:
-            from ..nn_modules.qlinear.qlinear_cuda_old import QuantLinear
+        if use_triton:
+            if torch.version.hip:
+                logger.warning("Running GPTQ triton version on AMD GPUs is untested and may result in errors or wrong predictions. Please use use_triton=False.")
+
+            from ..nn_modules.qlinear.qlinear_triton import QuantLinear
         else:
-            from ..nn_modules.qlinear.qlinear_cuda import QuantLinear
+            # If disable_exllamav2 is True, we want to fall back on the exllama kernel and not the cuda/cuda_old ones.
+            if disable_exllama is None:
+                if disable_exllamav2:
+                    disable_exllama = False
+                else:
+                    disable_exllama = True
+            
+            if bits == 4 and not disable_exllamav2 and EXLLAMAV2_KERNELS_AVAILABLE:
+                from ..nn_modules.qlinear.qlinear_exllamav2 import QuantLinear
+            elif bits == 4 and not disable_exllama and EXLLAMA_KERNELS_AVAILABLE:
+                from ..nn_modules.qlinear.qlinear_exllama import QuantLinear
+            elif not desc_act or group_size == -1:
+                from ..nn_modules.qlinear.qlinear_cuda_old import QuantLinear
+            else:
+                from ..nn_modules.qlinear.qlinear_cuda import QuantLinear
 
     return QuantLinear
 

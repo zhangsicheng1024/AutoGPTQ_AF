@@ -16,6 +16,8 @@ from .gpt_bigcode import GPTBigCodeGPTQForCausalLM
 from .baichuan import BaiChuanGPTQForCausalLM
 from .internlm import InternLMGPTQForCausalLM
 from .mpt import MPTGPTQForCausalLM
+from .qwen import QwenGPTQForCausalLM
+from .mistral import MistralGPTQForCausalLM
 
 GPTQ_CAUSAL_LM_MODEL_MAP = {
     "bloom": BloomGPTQForCausalLM,
@@ -29,9 +31,12 @@ GPTQ_CAUSAL_LM_MODEL_MAP = {
     "codegen": CodeGenGPTQForCausalLM,
     "RefinedWebModel": RWGPTQForCausalLM,
     "RefinedWeb": RWGPTQForCausalLM,
+    "falcon": RWGPTQForCausalLM,
     "baichuan": BaiChuanGPTQForCausalLM,
     "internlm": InternLMGPTQForCausalLM,
     "mpt": MPTGPTQForCausalLM,
+    "qwen": QwenGPTQForCausalLM,
+    "mistral": MistralGPTQForCausalLM,
 }
 
 
@@ -77,12 +82,21 @@ class AutoGPTQForCausalLM:
         use_cuda_fp16: bool = True,
         quantize_config: Optional[BaseQuantizeConfig] = None,
         model_basename: Optional[str] = None,
-        use_safetensors: bool = False,
+        use_safetensors: bool = True,
         trust_remote_code: bool = False,
         warmup_triton: bool = False,
         trainable: bool = False,
+        disable_exllama: Optional[bool] = None,
+        disable_exllamav2: bool = False,
         **kwargs
     ) -> BaseGPTQForCausalLM:
+        # If disable_exllamav2 is True, we want to fall back on the exllama kernel and not the cuda/cuda_old ones.
+        if disable_exllama is None:
+            if disable_exllamav2:
+                disable_exllama = False
+            else:
+                disable_exllama = True
+        
         model_type = check_and_get_model_type(model_name_or_path, trust_remote_code)
         quant_func = GPTQ_CAUSAL_LM_MODEL_MAP[model_type].from_quantized
         # A static list of kwargs needed for huggingface_hub
@@ -120,6 +134,8 @@ class AutoGPTQForCausalLM:
             trust_remote_code=trust_remote_code,
             warmup_triton=warmup_triton,
             trainable=trainable,
+            disable_exllama=disable_exllama,
+            disable_exllamav2=disable_exllamav2,
             **keywords
         )
 

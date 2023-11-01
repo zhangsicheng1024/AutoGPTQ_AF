@@ -19,6 +19,8 @@ except ImportError:
 
 
 class QuantLinear(nn.Module):
+    QUANT_TYPE = "cuda-old"
+
     def __init__(
         self,
         bits,
@@ -29,7 +31,8 @@ class QuantLinear(nn.Module):
         two_scale=False,
         use_cuda_fp16=True,
         kernel_switch_threshold=128,
-        trainable=False
+        trainable=False,
+        weight_dtype=torch.float16,
     ):
         super().__init__()
         global _autogptq_cuda_available
@@ -53,7 +56,7 @@ class QuantLinear(nn.Module):
         )
         self.register_buffer(
             'scales',
-            torch.zeros((math.ceil(infeatures / self.group_size), outfeatures), dtype=torch.float16)
+            torch.zeros((math.ceil(infeatures / self.group_size), outfeatures), dtype=weight_dtype)
         )
         self.register_buffer(
             'g_idx',
@@ -61,7 +64,7 @@ class QuantLinear(nn.Module):
         )
 
         if bias:
-            self.register_buffer('bias', torch.zeros((outfeatures), dtype=torch.float16))
+            self.register_buffer('bias', torch.zeros((outfeatures), dtype=weight_dtype))
         else:
             self.bias = None
         self.half_indim = self.infeatures // 2
@@ -91,6 +94,9 @@ class QuantLinear(nn.Module):
 
         self.trainable = trainable
 
+    def post_init(self):
+        pass
+
     def pack(self, linear, scales, zeros, g_idx):
         W = linear.weight.data.clone()
         if isinstance(linear, nn.Conv2d):
@@ -101,9 +107,9 @@ class QuantLinear(nn.Module):
         scales = scales.t().contiguous()
         zeros = zeros.t().contiguous()
         scale_zeros = zeros * scales
-        self.scales = scales.clone().half()
+        self.scales = scales.clone().to(dtype=linear.weight.dtype)
         if linear.bias is not None:
-            self.bias = linear.bias.clone().half()
+            self.bias = linear.bias.clone().to(dtype=linear.weight.dtype)
 
         intweight = []
         for idx in range(self.infeatures):
@@ -190,6 +196,7 @@ class QuantLinear(nn.Module):
         self.qzeros = torch.from_numpy(qzeros)
 
     def forward(self, x):
+        x_dtype = x.dtype
         out_shape = x.shape[:-1] + (self.outfeatures,)
         x = x.reshape(-1, x.shape[-1])
         if self.autogptq_cuda_available is True and (
@@ -225,7 +232,7 @@ class QuantLinear(nn.Module):
                 
             if self.bits in [2,4,8]:
                zeros = torch.bitwise_right_shift(torch.unsqueeze(self.qzeros, 2).expand(-1, -1, 32 // self.bits), self.wf.unsqueeze(0)).to(torch.int16 if self.bits == 8 else torch.int8)
-               torch.bitwise_and(zeros, (2 ** self.bits) - 1, out=zeros)
+               zeros = torch.bitwise_and(zeros, (2 ** self.bits) - 1)
                    
                zeros = zeros + 1
                zeros = zeros.reshape(-1, 1, zeros.shape[1] * zeros.shape[2])
@@ -234,7 +241,7 @@ class QuantLinear(nn.Module):
                scales = scales.reshape(-1, 1, scales.shape[-1])
                 
                weight = torch.bitwise_right_shift(torch.unsqueeze(self.qweight, 1).expand(-1, 32 // self.bits, -1), self.wf.unsqueeze(-1)).to(torch.int16 if self.bits == 8 else torch.int8)
-               torch.bitwise_and(weight,(2 ** self.bits) - 1, out=weight)
+               weight = torch.bitwise_and(weight,(2 ** self.bits) - 1)
                weight = weight.reshape(-1, self.group_size, weight.shape[2])
             elif self.bits == 3:
                zeros = self.qzeros.reshape(self.qzeros.shape[0], self.qzeros.shape[1]//3, 3, 1).expand(-1, -1, -1, 12)
@@ -262,8 +269,8 @@ class QuantLinear(nn.Module):
             weight = (scales * (weight - zeros))
             weight = weight.reshape(weight.shape[0] * weight.shape[1], weight.shape[2])
 
-            out = torch.matmul(x.half(), weight)
-        out = out.half().reshape(out_shape)
+            out = torch.matmul(x, weight)
+        out = out.to(dtype=weight.dtype).reshape(out_shape)
         out = out + self.bias if self.bias is not None else out
         return out
 
