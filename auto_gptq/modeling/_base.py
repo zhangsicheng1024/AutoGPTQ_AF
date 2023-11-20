@@ -45,6 +45,7 @@ class BaseQuantizeConfig(PushToHubMixin):
     model_name_or_path: Optional[str] = field(default=None)
     model_file_base_name: Optional[str] = field(default=None)
     gptq_quant: bool = field(default=False)
+    tilewise_quant: bool = field(default=False)
     two_scale: bool = field(default=False)
     tensor_percentile: Optional[float] = field(default=0.9)
     group_percentile: Optional[float] = field(default=1.0)
@@ -123,6 +124,7 @@ class BaseQuantizeConfig(PushToHubMixin):
             "model_name_or_path": self.model_name_or_path,
             "model_file_base_name": self.model_file_base_name,
             "gptq_quant": self.gptq_quant, # TODO
+            "tilewise_quant": self.tilewise_quant,
             "two_scale": self.two_scale,
         }
 
@@ -346,7 +348,7 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                 subset = {n: full[n] for n in names}
                 gptq = {}
                 for name in subset:
-                    gptq[name] = GPTQ(subset[name], self.quantize_config.format, self.quantize_config.gptq_quant)
+                    gptq[name] = GPTQ(subset[name], self.quantize_config.format, self.quantize_config.gptq_quant, self.quantize_config.tilewise_quant)
                     if self.quantize_config.format == 'nf':
                         gptq[name].quantizer.configure(
                             self.quantize_config.bits,

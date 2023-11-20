@@ -8,6 +8,7 @@ import torch.nn as nn
 import transformers
 
 from .quantizer import Quantizer
+from .tilewiseq import *
 
 
 logger = getLogger(__name__)
@@ -17,7 +18,7 @@ torch.backends.cudnn.allow_tf32 = False
 
 
 class GPTQ:
-    def __init__(self, layer, format: str, gptq_quant: bool):
+    def __init__(self, layer, format: str, gptq_quant: bool, tilewise_quant: bool):
         self.layer = layer
         self.dev = self.layer.weight.device
         W = layer.weight.data.clone()
@@ -42,7 +43,9 @@ class GPTQ:
         else:
             self.quantizer = Quantizer()
 
-        if gptq_quant == True:
+        if tilewise_quant == True:
+            self.fasterquant = self.fasterquant_tilewise
+        elif gptq_quant == True:
             self.fasterquant = self.fasterquant
         else:
             self.fasterquant = self.fasterquant_rtn
@@ -246,6 +249,13 @@ class GPTQ:
         self.quantizer.find_params(W, weight=True)
         self.layer.weight.data = self.quantizer.quantize(W, bit_width, group_size, tensor_percentile, group_percentile, format_prototype).type_as(self.layer.weight.data)
         
+    def fasterquant_tilewise(
+        self, bit_width=4, tile_size_row=256, tile_size_col=256
+    ):
+        W_q = self.layer.weight.data.clone()
+        tilewiseq(W_q, tile_size_row, tile_size_col)
+        self.layer.weight.data = W_q
+
 
     def fasterquant_rtn(
         self, blocksize=128, percdamp=.01, group_size=-1, actorder=False, static_groups=False

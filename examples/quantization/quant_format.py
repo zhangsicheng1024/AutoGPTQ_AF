@@ -423,6 +423,7 @@ def main():
     parser.add_argument('--format', default='int', choices=['int', 'fp', 'nf', 'af']) # quantize model to int / nf / fp
     parser.add_argument('--group_size', default=-1, type=int) # it is recommended to set the value to 128
     parser.add_argument('--gptq_quant', action='store_true') # use gptq or not, af quant can not use gptq currently (calculate hessian etc)
+    parser.add_argument('--tilewise_quant', action='store_true') # use gptq or not, af quant can not use gptq currently (calculate hessian etc)
     parser.add_argument('--two_scale', action='store_true') # use 2-scale for nf4
     parser.add_argument('--tensor_percentile', default=1.0, type=float) # only active when using af format, not ready currently
     parser.add_argument('--group_percentile', default=1.0, type=float) # only active when using af format, not ready currently
@@ -437,6 +438,7 @@ def main():
         format=args.format,
         group_size=args.group_size,
         gptq_quant=args.gptq_quant,
+        tilewise_quant=args.tilewise_quant,
         two_scale=args.two_scale,
         tensor_percentile=args.tensor_percentile,
         group_percentile=args.group_percentile,
