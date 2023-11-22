@@ -428,6 +428,9 @@ def main():
     parser.add_argument('--tensor_percentile', default=1.0, type=float) # only active when using af format, not ready currently
     parser.add_argument('--group_percentile', default=1.0, type=float) # only active when using af format, not ready currently
     parser.add_argument('--format_prototype', default='fp', type=str) # only active when using af format, int- or fp-like two-side quant bins
+    parser.add_argument('--level', default='n', choices=['n', 'c', 'r', 'cr', 'rc'])
+    parser.add_argument('--mix_cr', action='store_true')
+    parser.add_argument('--act_aware', action='store_true')
     parser.add_argument('--no_quant', action='store_true') # quant or only load&eval ori fp16 model
     parser.add_argument('--no_pack', action='store_true') # If only quant & eval in fp16, no pack. If need to save 4bit model, pack
     parser.add_argument('--tasks', default='wikitext2', type=str) # all: wikitext2,ptb,c4,hellaswag,mmlu
@@ -443,6 +446,9 @@ def main():
         tensor_percentile=args.tensor_percentile,
         group_percentile=args.group_percentile,
         format_prototype=args.format_prototype,
+        level=args.level,
+        mix_cr=args.mix_cr,
+        act_aware=args.act_aware,
     )
 
     # load un-quantized model, the model will always be force loaded into cpu

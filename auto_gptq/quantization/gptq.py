@@ -18,7 +18,7 @@ torch.backends.cudnn.allow_tf32 = False
 
 
 class GPTQ:
-    def __init__(self, layer, format: str, gptq_quant: bool, tilewise_quant: bool):
+    def __init__(self, layer, format: str, gptq_quant: bool, tilewise_quant: bool, level='n', mix_cr=False, act_aware=False):
         self.layer = layer
         self.dev = self.layer.weight.device
         W = layer.weight.data.clone()
@@ -47,6 +47,8 @@ class GPTQ:
             self.fasterquant = self.fasterquant_tilewise
         elif gptq_quant == True:
             self.fasterquant = self.fasterquant
+        elif level != 'n' or mix_cr:
+            self.fasterquant = self.fasterquant_mix
         else:
             self.fasterquant = self.fasterquant_rtn
 
@@ -344,6 +346,116 @@ class GPTQ:
             scale = torch.cat(scale, dim=1)
             zero = torch.cat(zero, dim=1)
             return scale, zero, g_idx
+
+    def fasterquant_mix(
+        self, blocksize=128, percdamp=.01, group_size=-1, actorder=False, static_groups=False, level='c', mix_cr=False, tensor_name=''
+    ):
+        W = self.layer.weight.data.clone()
+        if isinstance(self.layer, nn.Conv2d):
+            W = W.flatten(1)
+        if isinstance(self.layer, transformers.Conv1D):
+            W = W.t()
+        W = W.float()
+
+        tick = time.time()
+
+        if not self.quantizer.ready():
+            self.quantizer.find_params(W, weight=True)
+
+        Q = torch.zeros_like(W)
+
+        g_idx = []
+        scale = []
+        scale2 = []
+        zero = []
+
+        def get_quant(W, mix_cr : bool, level : str):
+            loss_func = torch.nn.MSELoss()
+            if mix_cr == True:
+                if level == 'n' or level == 'c' or level == 'r':
+                    self.quantizer.find_params_col(W)
+                    Q1 = self.quantizer.quantize_col(W)
+
+                    self.quantizer.find_params_row(W)
+                    Q2 = self.quantizer.quantize_row(W)
+                else:
+                    self.quantizer.find_params_col(W)
+                    W_t = W / self.quantizer.scale_col
+                    self.quantizer.find_params_row(W_t)
+                    Q1 = self.quantizer.quantize_row(W_t)
+                    Q1 = Q1 * self.quantizer.scale_col
+
+                    self.quantizer.find_params_row(W)
+                    W_t = W / self.quantizer.scale_row
+                    self.quantizer.find_params_col(W_t)
+                    Q2 = self.quantizer.quantize_col(W_t)
+                    Q2 = Q2 * self.quantizer.scale_row
+                loss1 = loss_func(Q1, W)
+                loss2 = loss_func(Q2, W)
+                Q = Q1 if loss1 < loss2 else Q2
+            else:
+                if level == 'n' or level == 'c':
+                    self.quantizer.find_params_col(W)
+                    Q1 = self.quantizer.quantize_col(W)
+                elif level == 'r':
+                    self.quantizer.find_params_row(W)
+                    Q1 = self.quantizer.quantize_row(W)
+                elif level == 'cr':
+                    self.quantizer.find_params_col(W)
+                    W_t = W / self.quantizer.scale_col
+                    self.quantizer.find_params_row(W_t)
+                    Q1 = self.quantizer.quantize_row(W_t)
+                    Q1 = Q1 * self.quantizer.scale_col
+                else:
+                    self.quantizer.find_params_row(W)
+                    W_t = W / self.quantizer.scale_row
+                    self.quantizer.find_params_col(W_t)
+                    Q1 = self.quantizer.quantize_col(W_t)
+                    Q1 = Q1 * self.quantizer.scale_row
+                Q = Q1
+                Q2 = None
+            return Q, Q1, Q2
+
+        if group_size == -1:
+            # self.quantizer.find_params(W, weight=True)
+            # Q = self.quantizer.quantize(W)
+
+            Q, Q1, Q2 = get_quant(W, mix_cr=mix_cr, level=level)
+        else:
+            split_tensors_i = torch.split(W, group_size, dim=0)
+            for i, split_tensor_i in enumerate(split_tensors_i):
+                Q_i = torch.zeros_like(split_tensor_i)
+                split_tensors_j = torch.split(split_tensor_i, group_size, dim=1)
+                for j, split_tensor_j in enumerate(split_tensors_j):
+                    self.quantizer.find_params_col(split_tensor_j)
+                    Q_split, Q1, Q2 = get_quant(split_tensor_j, mix_cr=mix_cr, level=level)
+                    # TODO: Q1 Q2 in group_size != -1, used in act-aware quant
+                    Q_i[:, j*group_size:(j+1)*group_size] = Q_split
+
+                    # scale.append(self.quantizer.scale)
+                Q[i*group_size:(i+1)*group_size, :] = Q_i
+
+        torch.cuda.synchronize()
+        logger.info(f'duration: {(time.time() - tick)}')
+
+        group_size = group_size if group_size != -1 else self.columns
+        g_idx = [i // group_size for i in range(self.columns)]
+        g_idx = torch.tensor(g_idx, dtype=torch.int32, device=Q.device)
+
+        if isinstance(self.layer, transformers.Conv1D):
+            Q = Q.t()
+        self.layer.weight.data = Q.reshape(self.layer.weight.shape).type_as(self.layer.weight.data)
+        if os.environ.get("DEBUG"):
+            logger.debug(torch.sum((self.layer(self.inp1) - self.out1) ** 2))
+
+        if scale == []:
+            scale.append(self.quantizer.scale)
+        # if scale2 == []:
+        #     scale2.append(self.quantizer.scale2)
+        scale = torch.cat(scale, dim=1)
+        # scale2 = torch.cat(scale2, dim=1)
+        # return scale, scale2, g_idx, Q1, Q2
+        return scale, g_idx, Q1, Q2
 
     def free(self):
         if os.environ.get("DEBUG"):

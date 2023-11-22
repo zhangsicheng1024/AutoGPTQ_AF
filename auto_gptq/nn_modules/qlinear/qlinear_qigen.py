@@ -11,11 +11,11 @@ from logging import getLogger
 
 logger = getLogger(__name__)
 
-try:
-    import cQIGen as qinfer
-except ImportError:
-    logger.error('cQIGen not installed.')
-    raise
+# try:
+#     import cQIGen as qinfer
+# except ImportError:
+#     logger.error('cQIGen not installed.')
+#     raise
 
 def mem_model(N, M, T, mu, tu, bits, l1, p, gs):
     m = GEKKO() # create GEKKO model

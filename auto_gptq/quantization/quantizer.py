@@ -122,6 +122,45 @@ class Quantizer(nn.Module):
             self.scale = self.scale.unsqueeze(0)
             self.zero = self.zero.unsqueeze(0)
 
+    def find_params_col(self, x):
+        dev = x.device
+        shape = x.shape
+        self.maxq = self.maxq.to(dev)
+
+        tmp = torch.zeros(x.shape[0], device=dev)
+        xmin = torch.minimum(x.min(1)[0], tmp)
+        xmax = torch.maximum(x.max(1)[0], tmp)
+        tmp = (xmin == 0) & (xmax == 0)
+        xmin[tmp] = -1
+        xmax[tmp] = +1
+
+        scale_col = (xmax - xmin) / self.maxq
+        zero_col = torch.round(-xmin / scale_col)
+
+        shape = [-1] + [1] * (len(shape) - 1)
+        self.scale_col = scale_col.reshape(shape)
+        self.zero_col = zero_col.reshape(shape)
+
+    def find_params_row(self, x):
+        dev = x.device
+        self.maxq = self.maxq.to(dev)
+
+        tmp = torch.zeros(x.shape[1], device=dev)
+        xmin = torch.minimum(x.min(0)[0], tmp)
+        xmax = torch.maximum(x.max(0)[0], tmp)
+        tmp = (xmin == 0) & (xmax == 0)
+        xmin[tmp] = -1
+        xmax[tmp] = +1
+
+        self.scale_row = (xmax - xmin) / self.maxq
+        self.zero_row = torch.round(-xmin / self.scale_row)
+
+    def quantize_col(self, x):
+        return quantize(x, self.scale_col, self.zero_col, self.maxq)
+
+    def quantize_row(self, x):
+        return quantize(x, self.scale_row, self.zero_row, self.maxq)
+
     def quantize(self, x):
         if self.ready():
             return quantize(x, self.scale, self.zero, self.maxq)

@@ -10,11 +10,11 @@ import transformers
 
 logger = getLogger(__name__)
 
-try:
-    from exllama_kernels import make_q4, q4_matmul
-except ImportError:
-    logger.error('exllama_kernels not installed.')
-    raise
+# try:
+#     from exllama_kernels import make_q4, q4_matmul
+# except ImportError:
+#     logger.error('exllama_kernels not installed.')
+#     raise
 
 # Dummy tensor to pass instead of g_idx since there is no way to pass "None" to a C++ extension
 none_tensor = torch.empty((1, 1), device="meta")

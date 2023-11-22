@@ -50,6 +50,9 @@ class BaseQuantizeConfig(PushToHubMixin):
     tensor_percentile: Optional[float] = field(default=0.9)
     group_percentile: Optional[float] = field(default=1.0)
     format_prototype: Optional[str] = field(default='fp')
+    level: str = field(default='n', metadata={"choices": ['n', 'c', 'r', 'cr', 'rc']})
+    mix_cr: bool = field(default=False)
+    act_aware: bool = field(default=False)
 
     def __post_init__(self):
         fields_info = fields(self)
@@ -334,6 +337,7 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
         if not self.quantize_config.true_sequential:
             inside_layer_modules = [sum(inside_layer_modules, [])]
         quantizers = {}
+        loss_func = torch.nn.MSELoss()
         for i in range(len(layers)):
             logger.info(f"Start quantizing layer {i + 1}/{len(layers)}")
             layer = layers[i]
@@ -343,12 +347,47 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                 force_layer_back_to_cpu = True
             cur_layer_device = get_device(layer)
 
+            def get_layer_outputs():
+                layer_outputs_tmp = []
+                for j in range(num_batches):
+                    layer_input = move_to_device(layer_inputs[j], cur_layer_device)
+                    layer_attention_mask = move_to_device(attention_masks[j], cur_layer_device)
+                    additional_layer_inputs = {
+                        "attention_mask": layer_attention_mask
+                    }
+                    layer_position_ids = None if not position_ids else move_to_device(position_ids[j], cur_layer_device)
+                    if layer_position_ids is not None:
+                        additional_layer_inputs["position_ids"] = layer_position_ids
+                    for k, v in layer_input_kwargs[j].items():
+                        if isinstance(v, torch.Tensor):
+                            additional_layer_inputs[k] = move_to_device(v, cur_layer_device)
+                        else:
+                            additional_layer_inputs[k] = v
+                    layer_output = move_to_device(
+                        layer(layer_input, **additional_layer_inputs)[0],
+                        cur_layer_device if cache_examples_on_gpu else CPU
+                    )
+                    layer_outputs_tmp.append(layer_output)
+                return layer_outputs_tmp
+            
+            if self.quantize_config.mix_cr and self.quantize_config.act_aware:
+                layer_outputs_ori = get_layer_outputs()
+                layer_outputs_ori = torch.cat(layer_outputs_ori)
+
             full = find_layers(layer)
             for names in inside_layer_modules:
                 subset = {n: full[n] for n in names}
                 gptq = {}
                 for name in subset:
-                    gptq[name] = GPTQ(subset[name], self.quantize_config.format, self.quantize_config.gptq_quant, self.quantize_config.tilewise_quant)
+                    gptq[name] = GPTQ(
+                        subset[name],
+                        self.quantize_config.format,
+                        self.quantize_config.gptq_quant,
+                        self.quantize_config.tilewise_quant, 
+                        level=self.quantize_config.level,
+                        mix_cr=self.quantize_config.mix_cr,
+                        act_aware=self.quantize_config.act_aware,
+                    )
                     if self.quantize_config.format == 'nf':
                         gptq[name].quantizer.configure(
                             self.quantize_config.bits,
@@ -413,7 +452,46 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
 
                 for name in subset:
                     logger.info(f'Quantizing {name} in layer {i + 1}/{len(layers)}...')
-                    if self.quantize_config.format == 'nf':
+                    if self.quantize_config.level != 'n' or self.quantize_config.mix_cr:
+                        scale, g_idx, Q1, Q2 = gptq[name].fasterquant(
+                            percdamp=self.quantize_config.damp_percent,
+                            group_size=self.quantize_config.group_size,
+                            actorder=self.quantize_config.desc_act,
+                            level=self.quantize_config.level,
+                            mix_cr=self.quantize_config.mix_cr,
+                            tensor_name=f'layer{i+1}.{name}',
+                        )
+                        quantizers[f'{self.layers_block_name}.{i}.{name}'] = (
+                            gptq[name].quantizer.to(CPU if force_layer_back_to_cpu else cur_layer_device),
+                            move_to_device(scale, CPU if force_layer_back_to_cpu else cur_layer_device),
+                            # move_to_device(scale2, CPU if force_layer_back_to_cpu else cur_layer_device),
+                            move_to_device(g_idx, CPU if force_layer_back_to_cpu else cur_layer_device)
+                        )
+
+                        # act-aware mix, for group_size = -1 done, for group_size != -1 TODO in gptq.py
+                        # if self.quantize_config.mix_cr == False:
+                        #     subset[name].weight.data = Q1.reshape(subset[name].weight.shape).type_as(subset[name].weight.data)
+                        # elif self.quantize_config.act_aware == False:
+                        #     loss_col = loss_func(Q1, subset[name].weight.data)
+                        #     loss_row = loss_func(Q2, subset[name].weight.data)
+                        #     better = 'col' if loss_col < loss_row else 'row'
+                        #     logger.info(f'loss_col={loss_col}, loss_row={loss_row}, {better} better')
+                        #     if loss_col < loss_row: subset[name].weight.data = Q1.reshape(subset[name].weight.shape).type_as(subset[name].weight.data)
+                        #     else: subset[name].weight.data = Q2.reshape(subset[name].weight.shape).type_as(subset[name].weight.data)
+                        # else:
+                        #     subset[name].weight.data = Q1.reshape(subset[name].weight.shape).type_as(subset[name].weight.data)
+                        #     layer_outputs_col = get_layer_outputs()
+                        #     layer_outputs_col = torch.cat(layer_outputs_col)
+                        #     subset[name].weight.data = Q2.reshape(subset[name].weight.shape).type_as(subset[name].weight.data)
+                        #     layer_outputs_row = get_layer_outputs()
+                        #     layer_outputs_row = torch.cat(layer_outputs_row)
+                        #     loss_col = loss_func(layer_outputs_col, layer_outputs_ori).item()
+                        #     loss_row = loss_func(layer_outputs_row, layer_outputs_ori).item()
+                        #     better = 'col' if loss_col < loss_row else 'row'
+                        #     logger.info(f'loss_col={loss_col}, loss_row={loss_row}, {better} better')
+                        #     if loss_col < loss_row: subset[name].weight.data = Q1.reshape(subset[name].weight.shape).type_as(subset[name].weight.data)
+                        #     else: subset[name].weight.data = Q2.reshape(subset[name].weight.shape).type_as(subset[name].weight.data)
+                    elif self.quantize_config.format == 'nf':
                         scale, scale2, g_idx = gptq[name].fasterquant(
                             percdamp=self.quantize_config.damp_percent,
                             group_size=self.quantize_config.group_size,
@@ -463,6 +541,8 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                         )
                     gptq[name].free()
             
+            if self.quantize_config.mix_cr and self.quantize_config.act_aware:
+                layer_outputs = get_layer_outputs()
             if self.quantize_config.gptq_quant == True:
                 for j in range(num_batches):
                     layer_input = move_to_device(layer_inputs[j], cur_layer_device)
@@ -487,6 +567,9 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
             layers[i] = move_to_device(layer, CPU if force_layer_back_to_cpu else cur_layer_device)
             del layer
             del gptq
+            if self.quantize_config.mix_cr and self.quantize_config.act_aware:
+                del layer_inputs
+                layer_inputs, layer_outputs = layer_outputs, []
             if self.quantize_config.gptq_quant == True:
                 del layer_inputs
                 layer_inputs, layer_outputs = layer_outputs, []
