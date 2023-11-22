@@ -65,7 +65,7 @@ def scale_initial_sicheng(W_tile):
     tmp = (xmin == 0) & (xmax == 0)
     xmin[tmp] = -1
     xmax[tmp] = +1
-    scale_col = torch.maximum(torch.abs(xmax), torch.abs(xmin)) / (12 / 2)
+    scale_col = torch.maximum(torch.abs(xmax), torch.abs(xmin))
     
 
     W_col_q = W_flatten / scale_col
@@ -77,9 +77,36 @@ def scale_initial_sicheng(W_tile):
     tmp = (xmin == 0) & (xmax == 0)
     xmin[tmp] = -1
     xmax[tmp] = +1
-    scale_row = torch.maximum(torch.abs(xmax), torch.abs(xmin)) / (12 / 2)
+    scale_row = torch.maximum(torch.abs(xmax), torch.abs(xmin))
 
     scale_row = torch.unsqueeze(scale_row, 1)
+
+    max_singular_value = 1
+    return scale_row, scale_col, max_singular_value
+
+def scale_initial_sicheng_t(W_tile):  # 转置后的tensor处理
+    W_flatten = W_tile.clone().flatten(1)
+    tmp = torch.zeros(W_flatten.shape[0], device = W_tile.device)
+    xmin = torch.minimum(W_flatten.min(1)[0], tmp)
+    xmax = torch.maximum(W_flatten.max(1)[0], tmp)
+    tmp = (xmin == 0) & (xmax == 0)
+    xmin[tmp] = -1
+    xmax[tmp] = +1
+    scale_row = torch.maximum(torch.abs(xmax), torch.abs(xmin))
+
+
+    scale_row = torch.unsqueeze(scale_row, 1)
+    W_row_q = W_flatten / scale_row
+
+    tmp = torch.zeros(W_row_q.shape[1], device = W_tile.device)
+    xmin = torch.minimum(W_row_q.min(0)[0], tmp)
+    xmax = torch.maximum(W_row_q.max(0)[0], tmp)
+    tmp = (xmin == 0) & (xmax == 0)
+    xmin[tmp] = -1
+    xmax[tmp] = +1
+    scale_col = torch.maximum(torch.abs(xmax), torch.abs(xmin))
+
+    scale_col = torch.unsqueeze(scale_col, 0)
 
     max_singular_value = 1
     return scale_row, scale_col, max_singular_value
@@ -87,7 +114,10 @@ def scale_initial_sicheng(W_tile):
 def tilewiseq(W, tile_size_row, tile_size_col):
     num_blocks_row = W.shape[0] // tile_size_row
     num_blocks_col = W.shape[1] // tile_size_col
-    code = torch.tensor([-6, -4, -3, -2, -1.5, -1, -0.5, -0, 0, 0.5, 1, 1.5, 2, 3, 4, 6], dtype=torch.float16)
+    code = torch.tensor([-1, -0.6961928009986877, -0.5250730514526367, -0.39491748809814453, 
+                            -0.28444138169288635, -0.18477343022823334, -0.09105003625154495, 0, 
+                            0.07958029955625534, 0.16093020141124725, 0.24611230194568634, 0.33791524171829224, 
+                            0.44070982933044434, 0.5626170039176941, 0.7229568362236023, 1], dtype=torch.float16)
     for i in range(num_blocks_row):
         for j in range(num_blocks_col):
             start_row = i * tile_size_row
@@ -98,7 +128,7 @@ def tilewiseq(W, tile_size_row, tile_size_col):
 
             W_tile = W[start_row:end_row, start_col:end_col].clone()
 
-            scale_row, scale_col, max_singular_value = scale_initial_sicheng(W_tile)
+            scale_row, scale_col, max_singular_value = scale_initial_sicheng_t(W_tile)
 
             min_loss = 100
             for k in range(100):
@@ -108,7 +138,7 @@ def tilewiseq(W, tile_size_row, tile_size_col):
                 if loss < min_loss:
                     min_loss = loss
                     scale_new_min = scale
-                
+                scale_new = scale_new.to(torch.float)
                 inf_indices = torch.isinf(scale_new)
                 scale_new[inf_indices] = scale[inf_indices] 
                 nan_indices = torch.isnan(scale_new)
@@ -118,11 +148,11 @@ def tilewiseq(W, tile_size_row, tile_size_col):
                 max_singular_value = S[0]
                 scale_row = U[:, 0]
                 scale_col = Vt.t()[0]
-
             U, S, Vt = torch.svd(scale_new_min)
             max_singular_value = S[0]
             scale_row = U[:, 0]
             scale_col = Vt.t()[0]
+
             scale = max_singular_value * scale_row.view(-1, 1) @ scale_col.view(1, -1)
             W_q, _ = quantize(W_tile, scale, code)
             W[start_row:end_row, start_col:end_col] = W_q
