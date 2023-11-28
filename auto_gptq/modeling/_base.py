@@ -395,6 +395,8 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                             sym=self.quantize_config.sym,
                             mse=False,
                             two_scale=self.quantize_config.two_scale,
+                            percentile=self.quantize_config.tensor_percentile,
+                            weight=subset[name].weight.data
                         )
                     elif self.quantize_config.format == 'fp':
                         gptq[name].quantizer.configure(
@@ -403,6 +405,8 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                             sym=self.quantize_config.sym,
                             mse=False,
                             two_scale=self.quantize_config.two_scale,
+                            percentile=self.quantize_config.tensor_percentile,
+                            weight=subset[name].weight.data
                         )
                     elif self.quantize_config.format == 'af':
                         gptq[name].quantizer.configure(
@@ -421,6 +425,9 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                             perchannel=True,
                             sym=self.quantize_config.sym,
                             mse=False,
+                            two_scale=self.quantize_config.two_scale,
+                            percentile=self.quantize_config.tensor_percentile,
+                            weight=subset[name].weight.data
                         )
 
                 def add_batch(name):

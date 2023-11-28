@@ -64,7 +64,7 @@ class Quantizer_fp4(nn.Module):
         bits, perchannel=False, sym=True,
         mse=False, norm=2.4, grid=100, maxshrink=.8,
         trits=False,
-        two_scale=False
+        two_scale=False, percentile=1.0, weight=None
     ):
         self.bits = bits
         self.perchannel = perchannel
@@ -84,7 +84,12 @@ class Quantizer_fp4(nn.Module):
             self.maxq = torch.tensor(8)
             self.code = torch.tensor([-4, -2, -1, -0, 0, 1, 2, 4], dtype=torch.float16)
 
+        self.percentile = percentile
+        self.max_value = weight.max() * percentile
+        self.min_value = weight.min() * percentile
+
     def find_params(self, x, weight=False):
+        x = x.clamp(max=self.max_value, min=self.min_value)
         dev = x.device
         shape = x.shape
         if self.perchannel:

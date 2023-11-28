@@ -40,8 +40,11 @@ class GPTQ:
         elif format == 'af':
             from .quantizer_af4 import Quantizer_af4
             self.quantizer = Quantizer_af4()
+        elif format == 'int':
+            from .quantizer_int import Quantizer_int
+            self.quantizer = Quantizer_int()
         else:
-            self.quantizer = Quantizer()
+            self.quantizer = Quantizer() # original autogptq quantizer
 
         if tilewise_quant == True:
             self.fasterquant = self.fasterquant_tilewise
