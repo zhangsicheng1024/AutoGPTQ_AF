@@ -457,7 +457,8 @@ def main():
     # quantize model
     if not args.no_quant:
         logger.info(f'Base model: {args.model}, Format: {args.format}{args.bits}, Group_size: {args.group_size}, GPTQ: {args.gptq_quant}')
-        if args.format == 'af': logger.info(f'format_prototype: {args.format_prototype}, tensor_percentile: {args.tensor_percentile}, group_percentile: {args.group_percentile}')
+        logger.info(f'percentile: {args.tensor_percentile}')
+        # if args.format == 'af': logger.info(f'format_prototype: {args.format_prototype}, tensor_percentile: {args.tensor_percentile}, group_percentile: {args.group_percentile}')
         time_start = time.time()
         traindataset,testenc = get_wikitext2(128, 0, 2048, args.model)
         model.quantize(traindataset, use_triton=False, pack=(not args.no_pack))

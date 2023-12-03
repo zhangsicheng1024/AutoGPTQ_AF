@@ -50,9 +50,10 @@ class Quantizer_int(nn.Module):
         if trits:
             self.maxq = torch.tensor(-1)
         self.two_scale = two_scale
+        
         self.percentile = percentile
-        self.max_value = weight.max() * percentile
-        self.min_value = weight.min() * percentile
+        self.max_value = weight.max()
+        self.min_value = weight.min()
 
         if self.bits == 4:
             self.maxq = torch.tensor(15)
@@ -64,8 +65,9 @@ class Quantizer_int(nn.Module):
             self.maxq = torch.tensor(3)
             self.code = torch.tensor([-2, -1, 0, 1], dtype=torch.float16)
 
-    def find_params(self, x, weight=False):
-        x = x.clamp(max=self.max_value, min=self.min_value)
+    def find_params(self, x, weight=False, percentile=None):
+        if percentile == None: percentile = self.percentile
+        x = x.clamp(max=self.max_value*percentile, min=self.min_value*percentile)
         dev = x.device
         self.maxq = self.maxq.to(dev)
 

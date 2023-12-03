@@ -87,11 +87,12 @@ class Quantizer_nf4(nn.Module):
                                       0.1833375245332718, 0.3819939494132996, 0.6229856610298157, 1], dtype=torch.float16)
 
         self.percentile = percentile
-        self.max_value = weight.max() * percentile
-        self.min_value = weight.min() * percentile
+        self.max_value = weight.max()
+        self.min_value = weight.min()
 
-    def find_params(self, x, weight=False):
-        x = x.clamp(max=self.max_value, min=self.min_value)
+    def find_params(self, x, weight=False, percentile=None):
+        if percentile == None: percentile = self.percentile
+        x = x.clamp(max=self.max_value*percentile, min=self.min_value*percentile)
         dev = x.device
         shape = x.shape
         if self.perchannel:

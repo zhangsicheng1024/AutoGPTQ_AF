@@ -85,11 +85,12 @@ class Quantizer_fp4(nn.Module):
             self.code = torch.tensor([-4, -2, -1, -0, 0, 1, 2, 4], dtype=torch.float16)
 
         self.percentile = percentile
-        self.max_value = weight.max() * percentile
-        self.min_value = weight.min() * percentile
+        self.max_value = weight.max()
+        self.min_value = weight.min()
 
-    def find_params(self, x, weight=False):
-        x = x.clamp(max=self.max_value, min=self.min_value)
+    def find_params(self, x, weight=False, percentile=None):
+        if percentile == None: percentile = self.percentile
+        x = x.clamp(max=self.max_value*percentile, min=self.min_value*percentile)
         dev = x.device
         shape = x.shape
         if self.perchannel:

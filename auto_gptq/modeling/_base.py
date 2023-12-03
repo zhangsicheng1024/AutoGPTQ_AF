@@ -47,7 +47,7 @@ class BaseQuantizeConfig(PushToHubMixin):
     gptq_quant: bool = field(default=False)
     tilewise_quant: bool = field(default=False)
     two_scale: bool = field(default=False)
-    tensor_percentile: Optional[float] = field(default=0.9)
+    tensor_percentile: Optional[float] = field(default=1.0)
     group_percentile: Optional[float] = field(default=1.0)
     format_prototype: Optional[str] = field(default='fp')
     level: str = field(default='n', metadata={"choices": ['n', 'c', 'r', 'cr', 'rc']})
@@ -387,6 +387,7 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                         level=self.quantize_config.level,
                         mix_cr=self.quantize_config.mix_cr,
                         act_aware=self.quantize_config.act_aware,
+                        percentile=self.quantize_config.tensor_percentile,
                     )
                     if self.quantize_config.format == 'nf':
                         gptq[name].quantizer.configure(
